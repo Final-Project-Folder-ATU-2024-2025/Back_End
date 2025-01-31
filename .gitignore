@@ -3,6 +3,7 @@ venv/
 
 # Ignore sensitive JSON files (like service account credentials)
 *.json
+firebase_service_key.json
 
 # Ignore logs and other temporary files
 *.log

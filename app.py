@@ -1,77 +1,58 @@
+import os
+import firebase_admin
+from firebase_admin import credentials, firestore, auth
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import pyrebase
 
-# Firebase configuration
-firebase_config = {
-    "apiKey": "AIzaSyBFcz4pxHeTejDbw4nMZT8vR28DYkkb2kw",
-    "authDomain": "collabfy-dc20d.firebaseapp.com",
-    "databaseURL": "https://collabfy-dc20d-default-rtdb.europe-west1.firebasedatabase.app",
-    "projectId": "collabfy-dc20d",
-    "storageBucket": "collabfy-dc20d.appspot.com",
-    "messagingSenderId": "146475704216",
-    "appId": "1:146475704216:web:de8856edb4798a7db215ed",
-}
-
-# Initialize Firebase
-firebase = pyrebase.initialize_app(firebase_config)
-auth = firebase.auth()
-db = firebase.database()
-
-# Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # Enable Cross-Origin Resource Sharing
+CORS(app)  # Enable CORS
 
-# Route to create a new user
+# Load Firebase Admin SDK from JSON file
+try:
+    cred = credentials.Certificate("firebase_service_key.json")
+    firebase_admin.initialize_app(cred)
+    print("✅ Firebase Admin SDK initialized successfully!")
+except Exception as e:
+    raise ValueError(f"🔥 ERROR: Failed to initialize Firebase Admin SDK. {str(e)}")
+
+# Firestore Database
+db = firestore.client()
+
+# API Route: Create User
 @app.route('/api/create-user', methods=['POST'])
 def create_user():
     try:
-        # Get user details from the request
         data = request.get_json()
-        name = data.get('name')
+        first_name = data.get('firstName')
+        surname = data.get('surname')
+        telephone = data.get('telephone')
         email = data.get('email')
         password = data.get('password')
 
         # Validate input
-        if not name or not email or not password:
+        if not first_name or not surname or not email or not password or not telephone:
             return jsonify({"error": "All fields are required"}), 400
 
-        # Create user in Firebase Authentication
-        user = auth.create_user_with_email_and_password(email, password)
-        user_id = user['localId']
+        # Create Firebase Authentication User
+        user = auth.create_user(
+            email=email,
+            password=password,
+            display_name=f"{first_name} {surname}"
+        )
 
-        # Store additional user information in Firebase Realtime Database
-        db.child("users").child(user_id).set({
-            "name": name,
-            "email": email
+        # Store User in Firestore
+        db.collection("users").document(user.uid).set({
+            "firstName": first_name,
+            "surname": surname,
+            "telephone": telephone,
+            "email": email,
+            "uid": user.uid
         })
 
-        return jsonify({"message": "User created successfully", "userId": user_id}), 201
+        return jsonify({"message": "User created successfully!", "userId": user.uid}), 201
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# Route to retrieve all users (for testing purposes)
-@app.route('/api/users', methods=['GET'])
-def get_users():
-    try:
-        # Fetch all users from the database
-        users = db.child("users").get()
-        users_dict = users.val()
-
-        # If no users exist, return an empty list
-        if not users_dict:
-            return jsonify([]), 200
-
-        # Convert Firebase dictionary to a list
-        user_list = [{"id": key, **value} for key, value in users_dict.items()]
-        return jsonify(user_list), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# Run the Flask app
 if __name__ == '__main__':
     app.run(debug=True)
