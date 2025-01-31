@@ -1,0 +1,9 @@
+# Ignore virtual environment
+venv/
+
+# Ignore sensitive JSON files (like service account credentials)
+*.json
+
+# Ignore logs and other temporary files
+*.log
+*.tmp
