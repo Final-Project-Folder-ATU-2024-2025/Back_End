@@ -1,5 +1,6 @@
 # Ignore virtual environment
 venv/
+env/
 
 # Ignore sensitive JSON files (like service account credentials)
 *.json
@@ -8,3 +9,9 @@ firebase_service_key.json
 # Ignore logs and other temporary files
 *.log
 *.tmp
+
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
