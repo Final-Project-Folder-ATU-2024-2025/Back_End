@@ -114,8 +114,9 @@ def login():
       - email (string)
       - password (string)
       
-    For demonstration purposes, it assumes that any email/password combination
-    is valid. In a production application, you should validate the credentials.
+    For demonstration purposes, we assume the credentials are valid.
+    This endpoint queries Firestore for a user document matching the provided email,
+    and if found, returns a dummy token along with the user's firstName and surname.
     """
     try:
         # Retrieve JSON data from the request
@@ -126,10 +127,30 @@ def login():
         if not data or 'email' not in data or 'password' not in data:
             return jsonify({'error': 'Email and password are required'}), 400
         
-        # For demonstration, assume login is always successful.
-        return jsonify({'message': 'Logged in successfully!'}), 200
+        email = data['email']
+        
+        # Query Firestore for the user document matching the provided email
+        users_ref = db.collection("users")
+        query = users_ref.where("email", "==", email).limit(1).stream()
+        user_doc = None
+        for doc in query:
+            user_doc = doc
+            break
+
+        if user_doc is None:
+            return jsonify({"error": "User not found"}), 404
+
+        user_data = user_doc.to_dict()
+
+        # Return a dummy token along with firstName and surname.
+        return jsonify({
+            "message": "Logged in successfully!",
+            "token": "dummy-token",  # In production, generate a real token.
+            "firstName": user_data.get("firstName", ""),
+            "surname": user_data.get("surname", "")
+        }), 200
+
     except Exception as e:
-        # Log any errors that occur in the login process
         print(f"🔥 ERROR in login: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
