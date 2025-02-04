@@ -61,6 +61,7 @@ def create_user():
             display_name=f"{first_name} {surname}"
         )
         
+        # Create user document in "users" collection.
         db.collection("users").document(user.uid).set({
             "firstName": first_name,
             "surname": surname,
@@ -89,7 +90,6 @@ def login():
             return jsonify({'error': 'Email and password are required'}), 400
         
         email = data['email']
-        
         users_ref = db.collection("users")
         query = users_ref.where("email", "==", email).limit(1).stream()
         user_doc = None
@@ -101,7 +101,6 @@ def login():
             return jsonify({"error": "User not found"}), 404
 
         user_data = user_doc.to_dict()
-
         return jsonify({
             "message": "Logged in successfully!",
             "token": "dummy-token",  # Replace with a real token in production.
@@ -159,23 +158,23 @@ def send_connection_request():
         if not from_user or not to_user:
             return jsonify({"error": "Both fromUserId and toUserId are required"}), 400
 
-        # Create connection request document
+        # Create a connection request document.
         req_ref = db.collection("connectionRequests").document()
         req_data = {
             "fromUserId": from_user,
             "toUserId": to_user,
-            "status": "pending"  # pending, accepted, or rejected
+            "status": "pending"
         }
         req_ref.set(req_data)
         
-        # Create a notification for the recipient
+        # Create a notification in the recipient’s (to_user’s) notifications subcollection.
         notification_data = {
             "type": "request",
             "message": "The following user wants to Connect:",
             "fromUser": {},
-            "toUserId": to_user,
             "status": "unread",
-            "timestamp": firestore.SERVER_TIMESTAMP
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "connectionRequestId": req_ref.id
         }
         sender_doc = db.collection("users").document(from_user).get()
         if sender_doc.exists:
@@ -186,7 +185,7 @@ def send_connection_request():
                 "email": sender_data.get("email", ""),
                 "telephone": sender_data.get("telephone", "")
             }
-        notif_ref = db.collection("notifications").document()
+        notif_ref = db.collection("users").document(to_user).collection("notifications").document()
         notif_ref.set(notification_data)
         
         return jsonify({"message": "Connection request sent", "requestId": req_ref.id}), 200
@@ -213,6 +212,11 @@ def cancel_connection_request():
                             .where("status", "==", "pending").stream()
         deleted = False
         for doc in query:
+            # Also delete the corresponding notification from the recipient’s notifications subcollection.
+            notif_query = db.collection("users").document(to_user).collection("notifications") \
+                            .where("connectionRequestId", "==", doc.id).stream()
+            for notif_doc in notif_query:
+                db.collection("users").document(to_user).collection("notifications").document(notif_doc.id).delete()
             requests_ref.document(doc.id).delete()
             deleted = True
 
@@ -226,7 +230,65 @@ def cancel_connection_request():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 9. Define the Notifications Endpoint
+# 9. Define an Endpoint for Responding to a Connection Request
+# (This handles acceptance or rejection, updates the request status, deletes the original notification, and notifies the requester.)
+# ---------------------------
+@app.route('/api/respond-connection-request', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def respond_connection_request():
+    try:
+        data = request.get_json()
+        request_id = data.get("requestId")
+        action = data.get("action")  # should be "accepted" or "rejected"
+        if not request_id or action not in ["accepted", "rejected"]:
+            return jsonify({"error": "requestId and a valid action (accepted or rejected) are required"}), 400
+        
+        # Retrieve the connection request document.
+        req_doc_ref = db.collection("connectionRequests").document(request_id)
+        req_doc = req_doc_ref.get()
+        if not req_doc.exists:
+            return jsonify({"error": "Connection request not found"}), 404
+        
+        req_data = req_doc.to_dict()
+        from_user = req_data.get("fromUserId")
+        to_user = req_data.get("toUserId")
+        
+        # Update the request status.
+        req_doc_ref.update({"status": action})
+        
+        # Delete the notification from the recipient’s notifications subcollection.
+        notif_query = db.collection("users").document(to_user).collection("notifications") \
+                        .where("connectionRequestId", "==", request_id).stream()
+        for notif in notif_query:
+            db.collection("users").document(to_user).collection("notifications").document(notif.id).delete()
+        
+        # Create a new notification for the requester informing them of the response.
+        response_notification_data = {
+            "type": "response",
+            "message": f"Your connection request has been {action}.",
+            "fromUser": {},  # details of the user who responded (i.e. to_user)
+            "status": "unread",
+            "timestamp": firestore.SERVER_TIMESTAMP
+        }
+        target_doc = db.collection("users").document(to_user).get()
+        if target_doc.exists:
+            target_data = target_doc.to_dict()
+            response_notification_data["fromUser"] = {
+                "firstName": target_data.get("firstName", ""),
+                "surname": target_data.get("surname", ""),
+                "email": target_data.get("email", ""),
+                "telephone": target_data.get("telephone", "")
+            }
+        resp_notif_ref = db.collection("users").document(from_user).collection("notifications").document()
+        resp_notif_ref.set(response_notification_data)
+        
+        return jsonify({"message": f"Connection request {action}"}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in respond_connection_request: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 10. Define the Notifications Endpoint
 # ---------------------------
 @app.route('/api/notifications', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -237,16 +299,16 @@ def notifications():
         if not user_id:
             return jsonify({"error": "userId is required"}), 400
 
-        notifs_ref = db.collection("notifications")
-        # Retrieve notifications without using order_by to avoid requiring a composite index.
-        query = notifs_ref.where("toUserId", "==", user_id).stream()
+        # Retrieve notifications from the user's "notifications" subcollection.
+        notifs_ref = db.collection("users").document(user_id).collection("notifications")
+        query = notifs_ref.stream()
 
         notifications = []
         for doc in query:
             ndata = doc.to_dict()
             ndata["id"] = doc.id
             notifications.append(ndata)
-        # Manually sort notifications by "timestamp" (if available) in descending order.
+        # Manually sort notifications by timestamp (if present) in descending order.
         notifications.sort(key=lambda n: n.get("timestamp", 0), reverse=True)
         return jsonify({"notifications": notifications}), 200
 
@@ -255,7 +317,7 @@ def notifications():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 10. Run the Flask App
+# 11. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
