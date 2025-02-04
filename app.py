@@ -10,7 +10,6 @@ from flask_cors import CORS, cross_origin
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# After-request handler to add CORS headers to every response
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
@@ -34,7 +33,7 @@ except Exception as e:
 db = firestore.client()
 
 # ---------------------------
-# 4. Define the API Endpoint to Create a User
+# 4. Create User Endpoint
 # ---------------------------
 @app.route('/api/create-user', methods=['POST'])
 def create_user():
@@ -61,7 +60,7 @@ def create_user():
             display_name=f"{first_name} {surname}"
         )
         
-        # Create user document in "users" collection.
+        # Create the user document in the "users" collection.
         db.collection("users").document(user.uid).set({
             "firstName": first_name,
             "surname": surname,
@@ -78,7 +77,7 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 5. Define the Login Endpoint
+# 5. Login Endpoint
 # ---------------------------
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -114,10 +113,10 @@ def login():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 6. Define the Search Users Endpoint
+# 6. Search Users Endpoint
 # ---------------------------
 @app.route('/api/search-users', methods=['POST', 'OPTIONS'])
-@cross_origin()  # Allow CORS for this endpoint
+@cross_origin()
 def search_users():
     try:
         data = request.get_json()
@@ -146,10 +145,10 @@ def search_users():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 7. Define the Send Connection Request Endpoint
+# 7. Send Connection Request Endpoint
 # ---------------------------
 @app.route('/api/send-connection-request', methods=['POST', 'OPTIONS'])
-@cross_origin()  # Ensure CORS for preflight and actual requests
+@cross_origin()
 def send_connection_request():
     try:
         data = request.get_json()
@@ -167,7 +166,7 @@ def send_connection_request():
         }
         req_ref.set(req_data)
         
-        # Create a notification in the recipient’s (to_user’s) notifications subcollection.
+        # Create a notification in the recipient’s notifications subcollection.
         notification_data = {
             "type": "request",
             "message": "The following user wants to Connect:",
@@ -194,7 +193,7 @@ def send_connection_request():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 8. Define the Cancel Connection Request Endpoint
+# 8. Cancel Connection Request Endpoint
 # ---------------------------
 @app.route('/api/cancel-connection-request', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -230,8 +229,7 @@ def cancel_connection_request():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 9. Define an Endpoint for Responding to a Connection Request
-# (This handles acceptance or rejection, updates the request status, deletes the original notification, and notifies the requester.)
+# 9. Respond to Connection Request Endpoint
 # ---------------------------
 @app.route('/api/respond-connection-request', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -239,11 +237,10 @@ def respond_connection_request():
     try:
         data = request.get_json()
         request_id = data.get("requestId")
-        action = data.get("action")  # should be "accepted" or "rejected"
+        action = data.get("action")  # Must be "accepted" or "rejected"
         if not request_id or action not in ["accepted", "rejected"]:
             return jsonify({"error": "requestId and a valid action (accepted or rejected) are required"}), 400
         
-        # Retrieve the connection request document.
         req_doc_ref = db.collection("connectionRequests").document(request_id)
         req_doc = req_doc_ref.get()
         if not req_doc.exists:
@@ -253,23 +250,56 @@ def respond_connection_request():
         from_user = req_data.get("fromUserId")
         to_user = req_data.get("toUserId")
         
-        # Update the request status.
+        # Update the connection request status.
         req_doc_ref.update({"status": action})
         
-        # Delete the notification from the recipient’s notifications subcollection.
+        # Delete the original notification from the recipient’s notifications subcollection.
         notif_query = db.collection("users").document(to_user).collection("notifications") \
                         .where("connectionRequestId", "==", request_id).stream()
         for notif in notif_query:
             db.collection("users").document(to_user).collection("notifications").document(notif.id).delete()
         
-        # Create a new notification for the requester informing them of the response.
+        # If the request is accepted, add each user to the other’s connections array.
+        if action == "accepted":
+            users_ref = db.collection("users")
+            from_doc = users_ref.document(from_user).get()
+            to_doc = users_ref.document(to_user).get()
+            if from_doc.exists and to_doc.exists:
+                from_data = from_doc.to_dict()
+                to_data = to_doc.to_dict()
+                connection_info_for_from = {
+                    "uid": to_user,
+                    "firstName": to_data.get("firstName", ""),
+                    "surname": to_data.get("surname", ""),
+                    "email": to_data.get("email", ""),
+                    "telephone": to_data.get("telephone", "")
+                }
+                connection_info_for_to = {
+                    "uid": from_user,
+                    "firstName": from_data.get("firstName", ""),
+                    "surname": from_data.get("surname", ""),
+                    "email": from_data.get("email", ""),
+                    "telephone": from_data.get("telephone", "")
+                }
+                from_connections = from_data.get("connections", [])
+                to_connections = to_data.get("connections", [])
+                if not any(conn.get("uid") == to_user for conn in from_connections):
+                    from_connections.append(connection_info_for_from)
+                    users_ref.document(from_user).update({"connections": from_connections})
+                if not any(conn.get("uid") == from_user for conn in to_connections):
+                    to_connections.append(connection_info_for_to)
+                    users_ref.document(to_user).update({"connections": to_connections})
+        
+        # Delete any notification in the recipient’s notifications subcollection for the request
+        # (already done above) and create a response notification for the requester.
         response_notification_data = {
             "type": "response",
             "message": f"Your connection request has been {action}.",
-            "fromUser": {},  # details of the user who responded (i.e. to_user)
+            "fromUser": {},
             "status": "unread",
             "timestamp": firestore.SERVER_TIMESTAMP
         }
+        # Get details from the user who responded (i.e. the recipient).
         target_doc = db.collection("users").document(to_user).get()
         if target_doc.exists:
             target_data = target_doc.to_dict()
@@ -288,7 +318,28 @@ def respond_connection_request():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 10. Define the Notifications Endpoint
+# 10. User Connections Endpoint
+# ---------------------------
+@app.route('/api/user-connections', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def user_connections():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"error": "userId is required"}), 400
+        user_doc = db.collection("users").document(user_id).get()
+        if not user_doc.exists:
+            return jsonify({"error": "User not found"}), 404
+        user_data = user_doc.to_dict()
+        connections = user_data.get("connections", [])
+        return jsonify({"connections": connections}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in user_connections: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 11. Notifications Endpoint
 # ---------------------------
 @app.route('/api/notifications', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -299,7 +350,6 @@ def notifications():
         if not user_id:
             return jsonify({"error": "userId is required"}), 400
 
-        # Retrieve notifications from the user's "notifications" subcollection.
         notifs_ref = db.collection("users").document(user_id).collection("notifications")
         query = notifs_ref.stream()
 
@@ -308,7 +358,6 @@ def notifications():
             ndata = doc.to_dict()
             ndata["id"] = doc.id
             notifications.append(ndata)
-        # Manually sort notifications by timestamp (if present) in descending order.
         notifications.sort(key=lambda n: n.get("timestamp", 0), reverse=True)
         return jsonify({"notifications": notifications}), 200
 
@@ -317,7 +366,7 @@ def notifications():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 11. Run the Flask App
+# 12. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
