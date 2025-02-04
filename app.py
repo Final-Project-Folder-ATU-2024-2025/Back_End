@@ -290,8 +290,7 @@ def respond_connection_request():
                     to_connections.append(connection_info_for_to)
                     users_ref.document(to_user).update({"connections": to_connections})
         
-        # Delete any notification in the recipient’s notifications subcollection for the request
-        # (already done above) and create a response notification for the requester.
+        # Create a response notification for the requester.
         response_notification_data = {
             "type": "response",
             "message": f"Your connection request has been {action}.",
@@ -299,7 +298,6 @@ def respond_connection_request():
             "status": "unread",
             "timestamp": firestore.SERVER_TIMESTAMP
         }
-        # Get details from the user who responded (i.e. the recipient).
         target_doc = db.collection("users").document(to_user).get()
         if target_doc.exists:
             target_data = target_doc.to_dict()
@@ -366,7 +364,28 @@ def notifications():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 12. Run the Flask App
+# 12. Dismiss Notification Endpoint
+# ---------------------------
+@app.route('/api/dismiss-notification', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def dismiss_notification():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        notification_id = data.get("notificationId")
+        if not user_id or not notification_id:
+            return jsonify({"error": "userId and notificationId are required"}), 400
+
+        notif_ref = db.collection("users").document(user_id).collection("notifications").document(notification_id)
+        notif_ref.delete()
+        return jsonify({"message": "Notification dismissed"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in dismiss_notification: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 13. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
