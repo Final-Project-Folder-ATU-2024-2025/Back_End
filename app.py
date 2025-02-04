@@ -10,6 +10,13 @@ from flask_cors import CORS, cross_origin
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
+# After-request handler to add CORS headers to every response
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
 # ---------------------------
 # 2. Initialize Firebase Admin SDK
 # ---------------------------
@@ -97,9 +104,10 @@ def login():
 
         return jsonify({
             "message": "Logged in successfully!",
-            "token": "dummy-token",  # In production, generate a real token.
+            "token": "dummy-token",  # Replace with a real token in production.
             "firstName": user_data.get("firstName", ""),
-            "surname": user_data.get("surname", "")
+            "surname": user_data.get("surname", ""),
+            "uid": user_data.get("uid", "")
         }), 200
 
     except Exception as e:
@@ -110,15 +118,8 @@ def login():
 # 6. Define the Search Users Endpoint
 # ---------------------------
 @app.route('/api/search-users', methods=['POST', 'OPTIONS'])
-@cross_origin()  # Ensure CORS headers are sent, including for the preflight OPTIONS request.
+@cross_origin()  # Allow CORS for this endpoint
 def search_users():
-    """
-    This endpoint accepts a JSON payload with:
-      - query (string)
-    If the query contains an '@', it searches for an exact email match.
-    Otherwise, it retrieves all users and filters by firstName or surname containing the query.
-    Returns a list of matching user profiles.
-    """
     try:
         data = request.get_json()
         search_query = data.get("query", "").strip()
@@ -146,7 +147,115 @@ def search_users():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 7. Run the Flask App
+# 7. Define the Send Connection Request Endpoint
+# ---------------------------
+@app.route('/api/send-connection-request', methods=['POST', 'OPTIONS'])
+@cross_origin()  # Ensure CORS for preflight and actual requests
+def send_connection_request():
+    try:
+        data = request.get_json()
+        from_user = data.get("fromUserId")
+        to_user = data.get("toUserId")
+        if not from_user or not to_user:
+            return jsonify({"error": "Both fromUserId and toUserId are required"}), 400
+
+        # Create connection request document
+        req_ref = db.collection("connectionRequests").document()
+        req_data = {
+            "fromUserId": from_user,
+            "toUserId": to_user,
+            "status": "pending"  # pending, accepted, or rejected
+        }
+        req_ref.set(req_data)
+        
+        # Create a notification for the recipient
+        notification_data = {
+            "type": "request",
+            "message": "The following user wants to Connect:",
+            "fromUser": {},
+            "toUserId": to_user,
+            "status": "unread",
+            "timestamp": firestore.SERVER_TIMESTAMP
+        }
+        sender_doc = db.collection("users").document(from_user).get()
+        if sender_doc.exists:
+            sender_data = sender_doc.to_dict()
+            notification_data["fromUser"] = {
+                "firstName": sender_data.get("firstName", ""),
+                "surname": sender_data.get("surname", ""),
+                "email": sender_data.get("email", ""),
+                "telephone": sender_data.get("telephone", "")
+            }
+        notif_ref = db.collection("notifications").document()
+        notif_ref.set(notification_data)
+        
+        return jsonify({"message": "Connection request sent", "requestId": req_ref.id}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in send-connection-request: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 8. Define the Cancel Connection Request Endpoint
+# ---------------------------
+@app.route('/api/cancel-connection-request', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def cancel_connection_request():
+    try:
+        data = request.get_json()
+        from_user = data.get("fromUserId")
+        to_user = data.get("toUserId")
+        if not from_user or not to_user:
+            return jsonify({"error": "Both fromUserId and toUserId are required"}), 400
+
+        requests_ref = db.collection("connectionRequests")
+        query = requests_ref.where("fromUserId", "==", from_user) \
+                            .where("toUserId", "==", to_user) \
+                            .where("status", "==", "pending").stream()
+        deleted = False
+        for doc in query:
+            requests_ref.document(doc.id).delete()
+            deleted = True
+
+        if deleted:
+            return jsonify({"message": "Connection request cancelled"}), 200
+        else:
+            return jsonify({"error": "No pending request found"}), 404
+
+    except Exception as e:
+        print(f"🔥 ERROR in cancel-connection-request: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 9. Define the Notifications Endpoint
+# ---------------------------
+@app.route('/api/notifications', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def notifications():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"error": "userId is required"}), 400
+
+        notifs_ref = db.collection("notifications")
+        # Retrieve notifications without using order_by to avoid requiring a composite index.
+        query = notifs_ref.where("toUserId", "==", user_id).stream()
+
+        notifications = []
+        for doc in query:
+            ndata = doc.to_dict()
+            ndata["id"] = doc.id
+            notifications.append(ndata)
+        # Manually sort notifications by "timestamp" (if available) in descending order.
+        notifications.sort(key=lambda n: n.get("timestamp", 0), reverse=True)
+        return jsonify({"notifications": notifications}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in notifications: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 10. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
