@@ -259,7 +259,7 @@ def respond_connection_request():
         for notif in notif_query:
             db.collection("users").document(to_user).collection("notifications").document(notif.id).delete()
         
-        # If the request is accepted, add each user to the other’s connections array.
+        # If accepted, add each user to the other’s connections array.
         if action == "accepted":
             users_ref = db.collection("users")
             from_doc = users_ref.document(from_user).get()
@@ -385,7 +385,45 @@ def dismiss_notification():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 13. Run the Flask App
+# 13. Disconnect Endpoint
+# ---------------------------
+@app.route('/api/disconnect', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def disconnect():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")  # Current user's id
+        disconnect_user_id = data.get("disconnectUserId")  # The user to disconnect from
+        if not user_id or not disconnect_user_id:
+            return jsonify({"error": "userId and disconnectUserId are required"}), 400
+
+        users_ref = db.collection("users")
+        user_doc = users_ref.document(user_id).get()
+        disconnect_doc = users_ref.document(disconnect_user_id).get()
+        if not user_doc.exists or not disconnect_doc.exists:
+            return jsonify({"error": "One or both users not found"}), 404
+
+        user_data = user_doc.to_dict()
+        disconnect_data = disconnect_doc.to_dict()
+
+        # Remove disconnect_user_id from current user's connections
+        user_connections = user_data.get("connections", [])
+        updated_user_connections = [conn for conn in user_connections if conn.get("uid") != disconnect_user_id]
+        users_ref.document(user_id).update({"connections": updated_user_connections})
+
+        # Remove current user id from disconnect user's connections
+        disconnect_connections = disconnect_data.get("connections", [])
+        updated_disconnect_connections = [conn for conn in disconnect_connections if conn.get("uid") != user_id]
+        users_ref.document(disconnect_user_id).update({"connections": updated_disconnect_connections})
+
+        return jsonify({"message": "Disconnected successfully"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in disconnect: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 14. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
