@@ -3,6 +3,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from flask import Flask, request, jsonify
 from flask_cors import CORS, cross_origin
+from datetime import datetime
 
 # ---------------------------
 # 1. Create the Flask App
@@ -423,7 +424,53 @@ def disconnect():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 14. Run the Flask App
+# 14. CREATE PROJECT Endpoint
+# ---------------------------
+@app.route('/api/create-project', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def create_project():
+    try:
+        data = request.get_json()
+        # Extract the required fields from the request JSON
+        project_name = data.get("projectName")
+        description = data.get("description")
+        tasks = data.get("tasks")  # Expected to be a list of objects { taskName, taskDescription }
+        deadline_str = data.get("deadline")  # Expected in YYYY-MM-DD format
+        owner_id = data.get("ownerId")  # The UID of the user creating the project
+
+        if not (project_name and description and owner_id and deadline_str):
+            return jsonify({"error": "Project name, description, deadline, and ownerId are required"}), 400
+
+        # If tasks are not provided, use an empty list
+        if tasks is None:
+            tasks = []
+
+        # Convert the deadline string to a datetime object
+        try:
+            deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+
+        # Create the project document in the "projects" collection
+        project_data = {
+            "projectName": project_name,
+            "description": description,
+            "tasks": tasks,
+            "deadline": deadline_date,
+            "ownerId": owner_id,
+            "createdAt": firestore.SERVER_TIMESTAMP
+        }
+        project_ref = db.collection("projects").document()
+        project_ref.set(project_data)
+
+        return jsonify({"message": "Project created successfully!", "projectId": project_ref.id}), 201
+
+    except Exception as e:
+        print(f"🔥 ERROR in create_project: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 15. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
