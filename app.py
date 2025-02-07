@@ -1,3 +1,4 @@
+# app.py
 import os
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -74,7 +75,7 @@ def create_user():
         return jsonify({"message": "User created successfully!", "userId": user.uid}), 201
     
     except Exception as e:
-        print(f"🔥 ERROR: {str(e)}")
+        print(f"🔥 ERROR in create_user: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
@@ -142,7 +143,7 @@ def search_users():
         return jsonify({"results": results}), 200
 
     except Exception as e:
-        print(f"🔥 ERROR in search-users: {str(e)}")
+        print(f"🔥 ERROR in search_users: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
@@ -190,7 +191,7 @@ def send_connection_request():
         
         return jsonify({"message": "Connection request sent", "requestId": req_ref.id}), 200
     except Exception as e:
-        print(f"🔥 ERROR in send-connection-request: {str(e)}")
+        print(f"🔥 ERROR in send_connection_request: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
@@ -226,7 +227,7 @@ def cancel_connection_request():
             return jsonify({"error": "No pending request found"}), 404
 
     except Exception as e:
-        print(f"🔥 ERROR in cancel-connection-request: {str(e)}")
+        print(f"🔥 ERROR in cancel_connection_request: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
@@ -470,7 +471,60 @@ def create_project():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 15. Run the Flask App
+# 15. My Projects Endpoint
+# ---------------------------
+@app.route('/api/my-projects', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def my_projects():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"error": "userId is required"}), 400
+
+        projects_ref = db.collection("projects")
+        query = projects_ref.where("ownerId", "==", user_id).stream()
+        projects = []
+        for doc in query:
+            proj = doc.to_dict()
+            proj["projectId"] = doc.id
+            projects.append(proj)
+        return jsonify({"projects": projects}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in my_projects: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 16. Project Deadlines Endpoint
+# ---------------------------
+@app.route('/api/project-deadlines', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def project_deadlines():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"error": "userId is required"}), 400
+
+        projects_ref = db.collection("projects")
+        query = projects_ref.where("ownerId", "==", user_id).stream()
+        deadlines = []
+        for doc in query:
+            proj = doc.to_dict()
+            deadlines.append({
+                "projectId": doc.id,
+                "projectName": proj.get("projectName", ""),
+                "deadline": proj.get("deadline", None)
+            })
+        return jsonify({"deadlines": deadlines}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in project_deadlines: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 17. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
