@@ -62,7 +62,6 @@ def create_user():
             display_name=f"{first_name} {surname}"
         )
         
-        # Create the user document in the "users" collection.
         db.collection("users").document(user.uid).set({
             "firstName": first_name,
             "surname": surname,
@@ -159,7 +158,6 @@ def send_connection_request():
         if not from_user or not to_user:
             return jsonify({"error": "Both fromUserId and toUserId are required"}), 400
 
-        # Create a connection request document.
         req_ref = db.collection("connectionRequests").document()
         req_data = {
             "fromUserId": from_user,
@@ -168,7 +166,6 @@ def send_connection_request():
         }
         req_ref.set(req_data)
         
-        # Create a notification in the recipient’s notifications subcollection.
         notification_data = {
             "type": "request",
             "message": "The following user wants to Connect:",
@@ -213,7 +210,6 @@ def cancel_connection_request():
                             .where("status", "==", "pending").stream()
         deleted = False
         for doc in query:
-            # Also delete the corresponding notification from the recipient’s notifications subcollection.
             notif_query = db.collection("users").document(to_user).collection("notifications") \
                             .where("connectionRequestId", "==", doc.id).stream()
             for notif_doc in notif_query:
@@ -252,16 +248,13 @@ def respond_connection_request():
         from_user = req_data.get("fromUserId")
         to_user = req_data.get("toUserId")
         
-        # Update the connection request status.
         req_doc_ref.update({"status": action})
         
-        # Delete the original notification from the recipient’s notifications subcollection.
         notif_query = db.collection("users").document(to_user).collection("notifications") \
                         .where("connectionRequestId", "==", request_id).stream()
         for notif in notif_query:
             db.collection("users").document(to_user).collection("notifications").document(notif.id).delete()
         
-        # If accepted, add each user to the other’s connections array.
         if action == "accepted":
             users_ref = db.collection("users")
             from_doc = users_ref.document(from_user).get()
@@ -292,7 +285,6 @@ def respond_connection_request():
                     to_connections.append(connection_info_for_to)
                     users_ref.document(to_user).update({"connections": to_connections})
         
-        # Create a response notification for the requester.
         response_notification_data = {
             "type": "response",
             "message": f"Your connection request has been {action}.",
@@ -432,7 +424,6 @@ def disconnect():
 def create_project():
     try:
         data = request.get_json()
-        # Extract the required fields from the request JSON
         project_name = data.get("projectName")
         description = data.get("description")
         tasks = data.get("tasks")  # Expected to be a list of objects { taskName, taskDescription }
@@ -442,24 +433,23 @@ def create_project():
         if not (project_name and description and owner_id and deadline_str):
             return jsonify({"error": "Project name, description, deadline, and ownerId are required"}), 400
 
-        # If tasks are not provided, use an empty list
         if tasks is None:
             tasks = []
 
-        # Convert the deadline string to a datetime object
         try:
             deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
         except ValueError:
             return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
 
-        # Create the project document in the "projects" collection
         project_data = {
             "projectName": project_name,
             "description": description,
             "tasks": tasks,
             "deadline": deadline_date,
             "ownerId": owner_id,
-            "createdAt": firestore.SERVER_TIMESTAMP
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            # Include team if provided (for projects created with collaborators already accepted)
+            "team": data.get("team", [])
         }
         project_ref = db.collection("projects").document()
         project_ref.set(project_data)
@@ -524,7 +514,113 @@ def project_deadlines():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 17. Run the Flask App
+# 17. NEW Endpoint: Respond to Project Invitation
+# ---------------------------
+@app.route('/api/respond-project-invitation', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def respond_project_invitation():
+    try:
+        data = request.get_json()
+        invitationId = data.get("invitationId")
+        action = data.get("action")  # Expected values: "accepted" or "declined"
+        userId = data.get("userId")
+        if not (invitationId and action and userId):
+            return jsonify({"error": "Missing fields"}), 400
+
+        # Retrieve the invitation notification from the user's notifications.
+        notif_ref = db.collection("users").document(userId).collection("notifications").document(invitationId)
+        notif_doc = notif_ref.get()
+        if not notif_doc.exists:
+            return jsonify({"error": "Invitation not found"}), 404
+        notif_data = notif_doc.to_dict()
+        projectId = notif_data.get("projectId")
+        projectName = notif_data.get("projectName")
+        ownerId = notif_data.get("ownerId", "")
+
+        # Remove the invitation notification.
+        notif_ref.delete()
+
+        if action == "accepted":
+            # Update the project document to add this user to the team.
+            project_ref = db.collection("projects").document(projectId)
+            project_doc = project_ref.get()
+            if project_doc.exists:
+                project_data = project_doc.to_dict()
+                team = project_data.get("team", [])
+                if not any(member.get("uid") == userId for member in team):
+                    team.append({"uid": userId})
+                    project_ref.update({"team": team})
+            # Notify the owner that the invitation was accepted.
+            owner_notif_data = {
+                "type": "project-invitation-response",
+                "message": f"User has accepted your invitation to the project {projectName}.",
+                "status": "unread",
+                "timestamp": firestore.SERVER_TIMESTAMP
+            }
+            owner_notif_ref = db.collection("users").document(ownerId).collection("notifications").document()
+            owner_notif_ref.set(owner_notif_data)
+            return jsonify({"message": "Invitation accepted"}), 200
+        else:
+            # For a decline, notify the owner.
+            owner_notif_data = {
+                "type": "project-invitation-response",
+                "message": f"User has declined your invitation to the project {projectName}.",
+                "status": "unread",
+                "timestamp": firestore.SERVER_TIMESTAMP
+            }
+            owner_notif_ref = db.collection("users").document(ownerId).collection("notifications").document()
+            owner_notif_ref.set(owner_notif_data)
+            return jsonify({"message": "Invitation declined"}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in respond_project_invitation: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 18. NEW Endpoint: Invite to Project
+# ---------------------------
+@app.route('/api/invite-to-project', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def invite_to_project():
+    if request.method == 'OPTIONS':
+        return '', 200
+    try:
+        data = request.get_json()
+        projectId = data.get("projectId")
+        projectName = data.get("projectName")
+        deadline = data.get("deadline")
+        ownerId = data.get("ownerId")
+        invitedUserId = data.get("invitedUserId")
+        if not (projectId and projectName and deadline and ownerId and invitedUserId):
+            return jsonify({"error": "Missing fields"}), 400
+
+        # Retrieve owner data for notification
+        owner_doc = db.collection("users").document(ownerId).get()
+        owner_data = owner_doc.to_dict() if owner_doc.exists else {}
+
+        # Create a notification for the invited user.
+        notification_data = {
+            "type": "project-invitation",
+            "message": f"{owner_data.get('firstName','')} {owner_data.get('surname','')} has invited you to join on a project.",
+            "projectName": projectName,
+            "deadline": deadline,
+            "ownerId": ownerId,
+            "fromUser": {
+                "firstName": owner_data.get("firstName", ""),
+                "surname": owner_data.get("surname", ""),
+                "email": owner_data.get("email", "")
+            },
+            "status": "unread",
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "projectId": projectId
+        }
+        notif_ref = db.collection("users").document(invitedUserId).collection("notifications").document()
+        notif_ref.set(notification_data)
+        return jsonify({"message": "Project invitation sent", "invitationId": notif_ref.id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 19. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
