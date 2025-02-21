@@ -473,11 +473,8 @@ def my_projects():
 
         projects_ref = db.collection("projects")
         owner_query = projects_ref.where("ownerId", "==", user_id).stream()
-        try:
-            team_query = projects_ref.where("teamIds", "array-contains", user_id).stream()
-        except Exception as e:
-            team_query = []  # If the field doesn't exist on some documents.
-            print("Error with teamIds query: ", e)
+        # Change the operator from "array-contains" to "array_contains"
+        team_query = projects_ref.where("teamIds", "array_contains", user_id).stream()
 
         projects = []
         seen = set()
@@ -538,11 +535,12 @@ def respond_project_invitation():
     try:
         data = request.get_json()
         invitationId = data.get("invitationId")
-        action = data.get("action")  # Expected values: "accepted" or "declined"
+        action = data.get("action")  # Expected: "accepted" or "declined"
         userId = data.get("userId")
         if not (invitationId and action and userId):
             return jsonify({"error": "Missing fields"}), 400
 
+        # Find the invitation notification in the accepting user's notifications subcollection
         notif_ref = db.collection("users").document(userId).collection("notifications").document(invitationId)
         notif_doc = notif_ref.get()
         if not notif_doc.exists:
@@ -552,42 +550,58 @@ def respond_project_invitation():
         projectName = notif_data.get("projectName")
         ownerId = notif_data.get("ownerId", "")
 
+        # Delete the invitation notification
         notif_ref.delete()
 
         if action == "accepted":
             project_ref = db.collection("projects").document(projectId)
-            project_doc = project_ref.get()
-            if project_doc.exists:
-                project_data = project_doc.to_dict()
-                team = project_data.get("team", [])
-                if not any(member.get("uid") == userId for member in team):
-                    team.append({"uid": userId})
-                    project_ref.update({
-                        "team": team,
-                        "teamIds": ArrayUnion([userId])
-                    })
+            # Build new member object from the accepting user's data
+            accepted_user_doc = db.collection("users").document(userId).get()
+            if accepted_user_doc.exists:
+                accepted_data = accepted_user_doc.to_dict()
+                new_member = {
+                    "uid": userId,
+                    "firstName": accepted_data.get("firstName", ""),
+                    "surname": accepted_data.get("surname", "")
+                }
+            else:
+                new_member = {"uid": userId}
+            # Update the project document using ArrayUnion for both team and teamIds
+            project_ref.update({
+                "team": firestore.ArrayUnion([new_member]),
+                "teamIds": firestore.ArrayUnion([userId])
+            })
+            # Notify the project owner about the acceptance
+            if accepted_user_doc.exists:
+                accepted_data = accepted_user_doc.to_dict()
+                accepted_first = accepted_data.get("firstName", "Someone")
+                accepted_surname = accepted_data.get("surname", "")
+            else:
+                accepted_first = "Someone"
+                accepted_surname = ""
             owner_notif_data = {
                 "type": "project-invitation-response",
-                "message": f"User has accepted your invitation to the project {projectName}.",
+                "message": f"{accepted_first} {accepted_surname} has accepted your invitation to the project {projectName}.",
+                "fromUser": {"firstName": accepted_first, "surname": accepted_surname},
                 "status": "unread",
                 "timestamp": firestore.SERVER_TIMESTAMP
             }
-            owner_notif_ref = db.collection("users").document(ownerId).collection("notifications").document()
-            owner_notif_ref.set(owner_notif_data)
+            db.collection("users").document(ownerId).collection("notifications").document().set(owner_notif_data)
             return jsonify({"message": "Invitation accepted"}), 200
         else:
+            # If declined, notify the owner without updating the project
             owner_notif_data = {
                 "type": "project-invitation-response",
-                "message": f"User has declined your invitation to the project {projectName}.",
+                "message": f"A user has declined your invitation to the project {projectName}.",
                 "status": "unread",
                 "timestamp": firestore.SERVER_TIMESTAMP
             }
-            owner_notif_ref = db.collection("users").document(ownerId).collection("notifications").document()
-            owner_notif_ref.set(owner_notif_data)
+            db.collection("users").document(ownerId).collection("notifications").document().set(owner_notif_data)
             return jsonify({"message": "Invitation declined"}), 200
     except Exception as e:
         print(f"🔥 ERROR in respond_project_invitation: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 18. NEW Endpoint: Invite to Project
