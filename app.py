@@ -646,7 +646,48 @@ def invite_to_project():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 19. Run the Flask App
+# 19. NEW Endpoint: Update Task Milestones
+# ---------------------------
+@app.route('/api/update-task-milestones', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def update_task_milestones():
+    try:
+        data = request.get_json()
+        projectId = data.get("projectId")
+        taskName = data.get("taskName")
+        milestones = data.get("milestones")  # Expected to be an array of objects, e.g., [{ "text": "Milestone 1", "status": "todo" }, ...]
+        
+        if not (projectId and taskName and milestones is not None):
+            return jsonify({"error": "projectId, taskName, and milestones are required"}), 400
+        
+        project_ref = db.collection("projects").document(projectId)
+        project_doc = project_ref.get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+        
+        project_data = project_doc.to_dict()
+        tasks = project_data.get("tasks", [])
+        updated = False
+        
+        # Look for the matching task and update its milestones
+        for task in tasks:
+            if task.get("taskName") == taskName:
+                task["milestones"] = milestones
+                updated = True
+                break
+        
+        if not updated:
+            return jsonify({"error": "Task not found"}), 404
+        
+        project_ref.update({"tasks": tasks})
+        return jsonify({"message": "Milestones updated successfully"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in update_task_milestones: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 20. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
