@@ -123,6 +123,9 @@ def search_users():
     try:
         data = request.get_json()
         search_query = data.get("query", "").strip()
+        # Get the current user's UID from the request payload.
+        current_user_id = data.get("currentUserId")
+        
         if not search_query:
             return jsonify({"error": "Query is required"}), 400
 
@@ -131,11 +134,18 @@ def search_users():
         if "@" in search_query:
             q = users_ref.where("email", "==", search_query).stream()
             for doc in q:
-                results.append(doc.to_dict())
+                user = doc.to_dict()
+                # Skip the current user
+                if current_user_id and user.get("uid") == current_user_id:
+                    continue
+                results.append(user)
         else:
             all_docs = users_ref.stream()
             for doc in all_docs:
                 user = doc.to_dict()
+                # Skip the current user
+                if current_user_id and user.get("uid") == current_user_id:
+                    continue
                 if (search_query.lower() in user.get("firstName", "").lower() or 
                     search_query.lower() in user.get("surname", "").lower()):
                     results.append(user)
