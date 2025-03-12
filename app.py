@@ -758,7 +758,33 @@ def update_task_milestones():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 20. Run the Flask App
+# 20. DELETE PROJECT Endpoint
+# ---------------------------
+@app.route('/api/delete-project', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def delete_project():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        if not project_id:
+            return jsonify({"error": "Project ID is required"}), 400
+
+        project_ref = db.collection("projects").document(project_id)
+        project_doc = project_ref.get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+
+        project_ref.delete()
+        return jsonify({"message": "Project deleted successfully"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in delete_project: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+        
+# ---------------------------
+# 21. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
+
+
