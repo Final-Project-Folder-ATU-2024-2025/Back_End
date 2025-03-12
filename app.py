@@ -123,8 +123,6 @@ def search_users():
     try:
         data = request.get_json()
         search_query = data.get("query", "").strip()
-        # Get the current user's UID from the request payload.
-        current_user_id = data.get("currentUserId")
         
         if not search_query:
             return jsonify({"error": "Query is required"}), 400
@@ -134,27 +132,23 @@ def search_users():
         if "@" in search_query:
             q = users_ref.where("email", "==", search_query).stream()
             for doc in q:
-                user = doc.to_dict()
-                # Skip the current user
-                if current_user_id and user.get("uid") == current_user_id:
-                    continue
-                results.append(user)
+                results.append(doc.to_dict())
         else:
             all_docs = users_ref.stream()
             for doc in all_docs:
                 user = doc.to_dict()
-                # Skip the current user
-                if current_user_id and user.get("uid") == current_user_id:
-                    continue
                 if (search_query.lower() in user.get("firstName", "").lower() or 
                     search_query.lower() in user.get("surname", "").lower()):
                     results.append(user)
         
+        if not results:
+            return jsonify({"results": results, "message": "User not found"}), 200
         return jsonify({"results": results}), 200
-
+        
     except Exception as e:
         print(f"🔥 ERROR in search_users: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 7. Send Connection Request Endpoint
