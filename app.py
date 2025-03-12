@@ -464,6 +464,52 @@ def create_project():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
+# 14B. UPDATE PROJECT Endpoint
+# ---------------------------
+@app.route('/api/update-project', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def update_project():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        project_name = data.get("projectName")
+        description = data.get("description")
+        tasks = data.get("tasks")  # You may update tasks as well.
+        deadline_str = data.get("deadline")
+        
+        if not project_id:
+            return jsonify({"error": "Project ID is required"}), 400
+
+        project_ref = db.collection("projects").document(project_id)
+        project_doc = project_ref.get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+
+        update_data = {}
+        if project_name:
+            update_data["projectName"] = project_name
+        if description:
+            update_data["description"] = description
+        if tasks is not None:
+            update_data["tasks"] = tasks
+        if deadline_str:
+            try:
+                deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
+                update_data["deadline"] = deadline_date
+            except ValueError:
+                return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+
+        if update_data:
+            project_ref.update(update_data)
+            return jsonify({"message": "Project updated successfully"}), 200
+        else:
+            return jsonify({"message": "Nothing to update"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in update_project: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
 # 15. My Projects Endpoint
 # ---------------------------
 @app.route('/api/my-projects', methods=['POST', 'OPTIONS'])
@@ -500,6 +546,27 @@ def my_projects():
 
     except Exception as e:
         print(f"🔥 ERROR in my_projects: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 15B. Get Project Endpoint
+# ---------------------------
+@app.route('/api/get-project', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def get_project():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        if not project_id:
+            return jsonify({"error": "projectId is required"}), 400
+        project_doc = db.collection("projects").document(project_id).get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+        project_data = project_doc.to_dict()
+        project_data["projectId"] = project_doc.id
+        return jsonify({"project": project_data}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in get_project: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
