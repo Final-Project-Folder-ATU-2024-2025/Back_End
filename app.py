@@ -47,9 +47,17 @@ def create_user():
         telephone = data.get("telephone")
         email = data.get("email")
         password = data.get("password")
+
         
         if not (first_name and surname and telephone and email and password):
             return jsonify({"error": "All fields are required"}), 400
+        
+         # Validate the password requirements.
+        import re
+        # Password must be at least 10 characters, include at least one capital letter, one number, and one special character.
+        password_pattern = re.compile(r'^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{10,}$')
+        if not password_pattern.match(password):
+            return jsonify({"error": "Password must be at least 10 characters long, include one capital letter, one number, and one special character."}), 400
         
         try:
             existing_user = auth.get_user_by_email(email)
