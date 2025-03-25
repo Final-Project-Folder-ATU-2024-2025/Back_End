@@ -788,9 +788,104 @@ def delete_project():
     except Exception as e:
         print(f"🔥 ERROR in delete_project: {str(e)}")
         return jsonify({"error": str(e)}), 500
-        
+
 # ---------------------------
-# 21. Run the Flask App
+# 21. Add Comment Endpoint
+# ---------------------------
+@app.route('/api/add-comment', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def add_comment():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        user_id = data.get("userId")
+        comment_text = data.get("commentText")
+        if not (project_id and user_id and comment_text):
+            return jsonify({"error": "projectId, userId, and commentText are required"}), 400
+
+        # Get project data for projectName and team details
+        project_ref = db.collection("projects").document(project_id)
+        project_doc = project_ref.get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+
+        project_data = project_doc.to_dict()
+        project_name = project_data.get("projectName", "this project")
+        
+        # Get the commenting user's name
+        user_doc = db.collection("users").document(user_id).get()
+        username = ""
+        if user_doc.exists:
+            user_data = user_doc.to_dict()
+            username = f"{user_data.get('firstName', '')} {user_data.get('surname', '')}".strip()
+
+        # Create the comment object with username
+        comment_data = {
+            "userId": user_id,
+            "username": username,
+            "commentText": comment_text,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        }
+        # Save the comment in a subcollection under the project document
+        db.collection("projects").document(project_id).collection("comments").add(comment_data)
+
+        # Prepare notification message
+        notif_message = f"User {username} left a note on the following project: {project_name}"
+
+        # Collect recipient IDs: owner and team members, then remove the commenting user
+        recipient_ids = set()
+        owner_id = project_data.get("ownerId")
+        if owner_id:
+            recipient_ids.add(owner_id)
+        for member_id in project_data.get("teamIds", []):
+            recipient_ids.add(member_id)
+        if user_id in recipient_ids:
+            recipient_ids.remove(user_id)
+
+        # Create notifications for each recipient
+        for rid in recipient_ids:
+            notif_data = {
+                "type": "comment",
+                "message": notif_message,
+                "fromUser": {"uid": user_id, "username": username},
+                "status": "unread",
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "projectId": project_id,
+                "projectName": project_name
+            }
+            db.collection("users").document(rid).collection("notifications").document().set(notif_data)
+
+        return jsonify({"message": "Comment added and notifications sent"}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in add_comment: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 22. GET COMMENTS Endpoint
+# ---------------------------
+@app.route('/api/get-comments', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def get_comments():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        if not project_id:
+            return jsonify({"error": "projectId is required"}), 400
+
+        comments_ref = db.collection("projects").document(project_id).collection("comments")
+        query = comments_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
+        comments = []
+        for doc in query:
+            cdata = doc.to_dict()
+            # Do not include the document ID in the returned data
+            comments.append(cdata)
+        return jsonify({"comments": comments}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in get_comments: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 23. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
