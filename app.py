@@ -826,7 +826,7 @@ def add_comment():
             "commentText": comment_text,
             "timestamp": firestore.SERVER_TIMESTAMP
         }
-        # Save the comment in a subcollection under the project document
+        # Save the comment in a subcollection under the selected project document
         db.collection("projects").document(project_id).collection("comments").add(comment_data)
 
         # Prepare notification message
@@ -860,6 +860,7 @@ def add_comment():
         print(f"🔥 ERROR in add_comment: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
 # ---------------------------
 # 22. GET COMMENTS Endpoint
 # ---------------------------
@@ -872,6 +873,7 @@ def get_comments():
         if not project_id:
             return jsonify({"error": "projectId is required"}), 400
 
+        # Retrieve comments attached to the selected project
         comments_ref = db.collection("projects").document(project_id).collection("comments")
         query = comments_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
         comments = []
@@ -883,6 +885,7 @@ def get_comments():
     except Exception as e:
         print(f"🔥 ERROR in get_comments: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 23. Run the Flask App
