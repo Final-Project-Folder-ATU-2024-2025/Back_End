@@ -829,8 +829,8 @@ def add_comment():
         # Save the comment in a subcollection under the selected project document
         db.collection("projects").document(project_id).collection("comments").add(comment_data)
 
-        # Prepare notification message
-        notif_message = f"User {username} left a note on the following project: {project_name}"
+        # Prepare notification message with updated wording
+        notif_message = f"User {username} commented on project {project_name}"
 
         # Collect recipient IDs: owner and team members, then remove the commenting user
         recipient_ids = set()
@@ -859,7 +859,6 @@ def add_comment():
     except Exception as e:
         print(f"🔥 ERROR in add_comment: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 # ---------------------------
 # 22. GET COMMENTS Endpoint
