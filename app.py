@@ -875,21 +875,72 @@ def get_comments():
         # Retrieve comments attached to the selected project
         comments_ref = db.collection("projects").document(project_id).collection("comments")
         query = comments_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
-        comments = []
-        for doc in query:
-            cdata = doc.to_dict()
-            # Do not include the document ID in the returned data
-            comments.append(cdata)
+        comments = [doc.to_dict() for doc in query]
         return jsonify({"comments": comments}), 200
     except Exception as e:
         print(f"🔥 ERROR in get_comments: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# ---------------------------
+# 23. NEW: Get Chat Messages Endpoint
+# ---------------------------
+@app.route('/api/get-chat-messages', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def get_chat_messages():
+    # Handle preflight (OPTIONS) requests
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    data = request.get_json()
+    # First, try to get a conversationId directly.
+    conversationId = data.get("conversationId")
+    if not conversationId:
+        # If conversationId is not provided, try computing it from userId and connectionId.
+        userId = data.get("userId")
+        connectionId = data.get("connectionId")
+        if not (userId and connectionId):
+            return jsonify({"error": "Either conversationId or both userId and connectionId are required"}), 400
+        conversationId = '-'.join(sorted([userId, connectionId]))
+
+    messages_ref = db.collection("conversations").document(conversationId).collection("messages")
+    query = messages_ref.order_by("timestamp", direction=firestore.Query.ASCENDING).stream()
+    messages = [doc.to_dict() for doc in query]
+    return jsonify({"messages": messages}), 200
 
 # ---------------------------
-# 23. Run the Flask App
+# 24. NEW: Send Chat Message Endpoint
+# ---------------------------
+@app.route('/api/send-chat-message', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def send_chat_message():
+    # Handle preflight (OPTIONS) requests
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    data = request.get_json()
+    senderId = data.get("senderId")
+    receiverId = data.get("receiverId")
+    messageText = data.get("messageText")
+    if not (senderId and receiverId and messageText):
+        return jsonify({"error": "senderId, receiverId, and messageText are required"}), 400
+    
+    # Generate conversationId by sorting the two user IDs to ensure uniqueness
+    conversationId = '-'.join(sorted([senderId, receiverId]))
+    
+    message_data = {
+        "senderId": senderId,
+        "messageText": messageText,
+        "timestamp": firestore.SERVER_TIMESTAMP
+    }
+    db.collection("conversations").document(conversationId).collection("messages").add(message_data)
+    return jsonify({"message": "Message sent"}), 200
+
+# ---------------------------
+# 25. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
+
+
 
 
