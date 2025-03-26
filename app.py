@@ -230,7 +230,7 @@ def update_user_settings():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 5B. Update User Password Endpoint
+# 5B. Update User Password Endpoint (Updated to also update Firestore)
 # ---------------------------
 @app.route('/api/update-user-password', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -243,7 +243,12 @@ def update_user_password():
         if not user_id or not new_password:
             return jsonify({"error": "userId and newPassword are required"}), 400
 
+        # Update the password in Firebase Auth
         auth.update_user(user_id, password=new_password)
+
+        # Hash the new password and update the Firestore record
+        new_hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        db.collection("users").document(user_id).update({"password_hash": new_hashed_password})
 
         return jsonify({"message": "Password updated successfully"}), 200
 
@@ -271,19 +276,22 @@ def update_user():
         if new_telephone:
             update_data["telephone"] = new_telephone
 
-        # Update telephone in Firestore if needed.
-        if update_data:
-            db.collection("users").document(user_id).update(update_data)
-
-        # If a new password is provided, update it in Firebase Auth.
+        # If a new password is provided, update it in Firebase Auth
+        # and update the password hash in Firestore.
         if new_password:
             auth.update_user(user_id, password=new_password)
+            new_hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            update_data["password_hash"] = new_hashed_password
+
+        if update_data:
+            db.collection("users").document(user_id).update(update_data)
 
         return jsonify({"message": "User updated successfully"}), 200
 
     except Exception as e:
         print(f"🔥 ERROR in update_user: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 6. Search Users Endpoint
