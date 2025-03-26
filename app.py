@@ -1,4 +1,3 @@
-# app.py
 import os
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -6,6 +5,7 @@ from firebase_admin.firestore import ArrayUnion  # For updating arrays
 from flask import Flask, request, jsonify
 from flask_cors import CORS, cross_origin
 from datetime import datetime
+import bcrypt  # For password hashing and verification
 
 # ---------------------------
 # 1. Create the Flask App
@@ -36,69 +36,95 @@ except Exception as e:
 db = firestore.client()
 
 # ---------------------------
-# 4. Create User Endpoint
+# 4. Create User Endpoint (Updated: Telephone is optional, email stored in lowercase)
 # ---------------------------
 @app.route('/api/create-user', methods=['POST'])
 def create_user():
     try:
         data = request.get_json()
+        print("Received create-user data:", data)  # Debug log
+
         first_name = data.get("firstName")
         surname = data.get("surname")
-        telephone = data.get("telephone")
+        # Telephone is optional – default to an empty string if not provided.
+        telephone = data.get("telephone", "")
         email = data.get("email")
         password = data.get("password")
 
-        
-        if not (first_name and surname and telephone and email and password):
-            return jsonify({"error": "All fields are required"}), 400
-        
-         # Validate the password requirements.
+        # Require first name, surname, email, and password.
+        if not (first_name and surname and email and password):
+            error_msg = "First name, surname, email, and password are required"
+            print("Validation error:", error_msg)
+            return jsonify({"error": error_msg}), 400
+
+        # Convert email to lowercase for consistency
+        email = email.lower()
+
+        # Validate the password requirements.
         import re
-        # Password must be at least 10 characters, include at least one capital letter, one number, and one special character.
-        password_pattern = re.compile(r'^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{10,}$')
+        # Password must be at least 10 characters long, include at least one digit and one special character.
+        password_pattern = re.compile(r'^(?=.*\d)(?=.*[@$!%*?&]).{10,}$')
         if not password_pattern.match(password):
-            return jsonify({"error": "Password must be at least 10 characters long, include one capital letter, one number, and one special character."}), 400
-        
+            error_msg = ("Password must be at least 10 characters long and include "
+                         "at least one number and one special character.")
+            print("Password validation error:", error_msg)
+            return jsonify({"error": error_msg}), 400
+
         try:
             existing_user = auth.get_user_by_email(email)
-            return jsonify({"error": "User already exists", "uid": existing_user.uid}), 400
+            error_msg = "User already exists"
+            print("Error:", error_msg, "UID:", existing_user.uid)
+            return jsonify({"error": error_msg, "uid": existing_user.uid}), 400
         except firebase_admin.auth.UserNotFoundError:
             pass
-        
+
+        # Hash the password using bcrypt
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        print("Password hashed successfully.")
+
+        # Create the user in Firebase Auth
         user = auth.create_user(
             email=email,
             password=password,
             display_name=f"{first_name} {surname}"
         )
-        
+        print("Firebase Auth user created with UID:", user.uid)
+
+        # Store the user data in Firestore along with the hashed password
         db.collection("users").document(user.uid).set({
             "firstName": first_name,
             "surname": surname,
             "telephone": telephone,
-            "email": email,
+            "email": email,  # Stored in lowercase
             "uid": user.uid,
-            "connections": []
+            "connections": [],
+            "password_hash": hashed_password
         })
-        
+        print("User data stored in Firestore for UID:", user.uid)
+
         return jsonify({"message": "User created successfully!", "userId": user.uid}), 201
-    
+
     except Exception as e:
         print(f"🔥 ERROR in create_user: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
 # ---------------------------
-# 5. Login Endpoint
+# 5. Login Endpoint (Updated with 5D logic, email queried in lowercase)
 # ---------------------------
 @app.route('/api/login', methods=['POST'])
 def login():
     try:
         data = request.get_json()
         print("Login endpoint received data:", data)
-        
+
         if not data or 'email' not in data or 'password' not in data:
             return jsonify({'error': 'Email and password are required'}), 400
-        
-        email = data['email']
+
+        # Convert email to lowercase for consistency
+        email = data['email'].lower()
+        provided_password = data['password']
+
         users_ref = db.collection("users")
         query = users_ref.where("email", "==", email).limit(1).stream()
         user_doc = None
@@ -110,9 +136,29 @@ def login():
             return jsonify({"error": "User not found"}), 404
 
         user_data = user_doc.to_dict()
+        stored_password_hash = user_data.get("password_hash")
+
+        # ---------------------------
+        # 5D. Migration/Error Handling for Missing Password Hash
+        # ---------------------------
+        if not stored_password_hash:
+            print("User record missing password_hash for user:", email)
+            return jsonify({"error": "User record is missing a hashed password. Please reset your password."}), 500
+
+        # Debug logging (remove or secure before production)
+        print("Stored hash:", stored_password_hash)
+        print("Provided password:", provided_password)
+
+        # Verify the provided password using bcrypt
+        if not bcrypt.checkpw(provided_password.encode('utf-8'), stored_password_hash.encode('utf-8')):
+            return jsonify({"error": "Invalid password"}), 401
+
+        # Generate a token after successful authentication (replace with your token generation logic)
+        token = "dummy-token"  # Replace with real token generation for production
+
         return jsonify({
             "message": "Logged in successfully!",
-            "token": "dummy-token",  # Replace with a real token in production.
+            "token": token,
             "firstName": user_data.get("firstName", ""),
             "surname": user_data.get("surname", ""),
             "uid": user_data.get("uid", "")
@@ -120,6 +166,123 @@ def login():
 
     except Exception as e:
         print(f"🔥 ERROR in login: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+        # ---------------------------
+        # 5D. Migration/Error Handling for Missing Password Hash
+        # ---------------------------
+        if not stored_password_hash:
+            # This means the user's record doesn't include a hashed password.
+            # You might force a password reset or instruct the user to update their password.
+            print("User record missing password_hash for user:", email)
+            return jsonify({"error": "User record is missing a hashed password. Please reset your password."}), 500
+
+        # Debug logging (remove or secure before production)
+        print("Stored hash:", stored_password_hash)
+        print("Provided password:", provided_password)
+
+        # Verify the provided password using bcrypt
+        if not bcrypt.checkpw(provided_password.encode('utf-8'), stored_password_hash.encode('utf-8')):
+            return jsonify({"error": "Invalid password"}), 401
+
+        # Generate a token after successful authentication (replace this with your token generation logic)
+        token = "dummy-token"  # Replace with real token generation for production
+
+        return jsonify({
+            "message": "Logged in successfully!",
+            "token": token,
+            "firstName": user_data.get("firstName", ""),
+            "surname": user_data.get("surname", ""),
+            "uid": user_data.get("uid", "")
+        }), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in login: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 5A. Update User Settings Endpoint
+# ---------------------------
+@app.route('/api/update-user-settings', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def update_user_settings():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        new_telephone = data.get("telephone")
+
+        if not user_id:
+            return jsonify({"error": "userId is required"}), 400
+
+        update_data = {}
+        if new_telephone:
+            update_data["telephone"] = new_telephone
+
+        if not update_data:
+            return jsonify({"error": "No data provided to update"}), 400
+
+        db.collection("users").document(user_id).update(update_data)
+
+        return jsonify({"message": "User settings updated successfully"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in update_user_settings: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 5B. Update User Password Endpoint
+# ---------------------------
+@app.route('/api/update-user-password', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def update_user_password():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        new_password = data.get("newPassword")
+
+        if not user_id or not new_password:
+            return jsonify({"error": "userId and newPassword are required"}), 400
+
+        auth.update_user(user_id, password=new_password)
+
+        return jsonify({"message": "Password updated successfully"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in update_user_password: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
+# 5C. Update User Endpoint (Combined Settings Update)
+# ---------------------------
+@app.route('/api/update-user', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def update_user():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        new_telephone = data.get("telephone")
+        new_password = data.get("newPassword")
+
+        if not user_id:
+            return jsonify({"error": "userId is required"}), 400
+
+        # Create an update data dictionary for Firestore
+        update_data = {}
+        if new_telephone:
+            update_data["telephone"] = new_telephone
+
+        # Update telephone in Firestore if needed.
+        if update_data:
+            db.collection("users").document(user_id).update(update_data)
+
+        # If a new password is provided, update it in Firebase Auth.
+        if new_password:
+            auth.update_user(user_id, password=new_password)
+
+        return jsonify({"message": "User updated successfully"}), 200
+
+    except Exception as e:
+        print(f"🔥 ERROR in update_user: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
@@ -131,7 +294,7 @@ def search_users():
     try:
         data = request.get_json()
         search_query = data.get("query", "").strip()
-        
+
         if not search_query:
             return jsonify({"error": "Query is required"}), 400
 
@@ -148,15 +311,14 @@ def search_users():
                 if (search_query.lower() in user.get("firstName", "").lower() or 
                     search_query.lower() in user.get("surname", "").lower()):
                     results.append(user)
-        
+
         if not results:
             return jsonify({"results": results, "message": "User not found"}), 200
         return jsonify({"results": results}), 200
-        
+
     except Exception as e:
         print(f"🔥 ERROR in search_users: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 # ---------------------------
 # 7. Send Connection Request Endpoint
@@ -178,7 +340,7 @@ def send_connection_request():
             "status": "pending"
         }
         req_ref.set(req_data)
-        
+
         notification_data = {
             "type": "request",
             "message": "The following user wants to Connect:",
@@ -198,7 +360,7 @@ def send_connection_request():
             }
         notif_ref = db.collection("users").document(to_user).collection("notifications").document()
         notif_ref.set(notification_data)
-        
+
         return jsonify({"message": "Connection request sent", "requestId": req_ref.id}), 200
     except Exception as e:
         print(f"🔥 ERROR in send_connection_request: {str(e)}")
@@ -251,23 +413,23 @@ def respond_connection_request():
         action = data.get("action")  # Must be "accepted" or "rejected"
         if not request_id or action not in ["accepted", "rejected"]:
             return jsonify({"error": "requestId and a valid action (accepted or rejected) are required"}), 400
-        
+
         req_doc_ref = db.collection("connectionRequests").document(request_id)
         req_doc = req_doc_ref.get()
         if not req_doc.exists:
             return jsonify({"error": "Connection request not found"}), 404
-        
+
         req_data = req_doc.to_dict()
         from_user = req_data.get("fromUserId")
         to_user = req_data.get("toUserId")
-        
+
         req_doc_ref.update({"status": action})
-        
+
         notif_query = db.collection("users").document(to_user).collection("notifications") \
                         .where("connectionRequestId", "==", request_id).stream()
         for notif in notif_query:
             db.collection("users").document(to_user).collection("notifications").document(notif.id).delete()
-        
+
         if action == "accepted":
             users_ref = db.collection("users")
             from_doc = users_ref.document(from_user).get()
@@ -316,7 +478,7 @@ def respond_connection_request():
             }
         resp_notif_ref = db.collection("users").document(from_user).collection("notifications").document()
         resp_notif_ref.set(response_notification_data)
-        
+
         return jsonify({"message": f"Connection request {action}"}), 200
     except Exception as e:
         print(f"🔥 ERROR in respond_connection_request: {str(e)}")
@@ -681,7 +843,6 @@ def respond_project_invitation():
         print(f"🔥 ERROR in respond_project_invitation: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
 # ---------------------------
 # 18. NEW Endpoint: Invite to Project
 # ---------------------------
@@ -887,15 +1048,12 @@ def get_comments():
 @app.route('/api/get-chat-messages', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def get_chat_messages():
-    # Handle preflight (OPTIONS) requests
     if request.method == 'OPTIONS':
         return '', 200
 
     data = request.get_json()
-    # First, try to get a conversationId directly.
     conversationId = data.get("conversationId")
     if not conversationId:
-        # If conversationId is not provided, try computing it from userId and connectionId.
         userId = data.get("userId")
         connectionId = data.get("connectionId")
         if not (userId and connectionId):
@@ -913,7 +1071,6 @@ def get_chat_messages():
 @app.route('/api/send-chat-message', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def send_chat_message():
-    # Handle preflight (OPTIONS) requests
     if request.method == 'OPTIONS':
         return '', 200
 
@@ -923,10 +1080,9 @@ def send_chat_message():
     messageText = data.get("messageText")
     if not (senderId and receiverId and messageText):
         return jsonify({"error": "senderId, receiverId, and messageText are required"}), 400
-    
-    # Generate conversationId by sorting the two user IDs to ensure uniqueness
+
     conversationId = '-'.join(sorted([senderId, receiverId]))
-    
+
     message_data = {
         "senderId": senderId,
         "messageText": messageText,
@@ -940,7 +1096,3 @@ def send_chat_message():
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
