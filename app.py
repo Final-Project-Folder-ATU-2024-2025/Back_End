@@ -468,14 +468,18 @@ def create_project():
         tasks = data.get("tasks")
         deadline_str = data.get("deadline")
         owner_id = data.get("ownerId")
+
         if not (project_name and description and owner_id and deadline_str):
             return jsonify({"error": "Project name, description, deadline, and ownerId are required"}), 400
+
         if tasks is None:
             tasks = []
+
         try:
             deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
         except ValueError:
             return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+
         project_data = {
             "projectName": project_name,
             "description": description,
@@ -488,7 +492,9 @@ def create_project():
         }
         project_ref = db.collection("projects").document()
         project_ref.set(project_data)
+
         return jsonify({"message": "Project created successfully!", "projectId": project_ref.id}), 201
+
     except Exception as e:
         print(f"🔥 ERROR in create_project: {str(e)}")
         return jsonify({"error": str(e)}), 500
