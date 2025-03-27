@@ -165,15 +165,27 @@ def update_user():
         user_id = data.get("userId")
         new_telephone = data.get("telephone")
         new_password = data.get("newPassword")
+        # New fields for name and surname:
+        new_first_name = data.get("firstName")
+        new_surname = data.get("surname")
+        
         if not user_id:
             return jsonify({"error": "userId is required"}), 400
+        
         update_data = {}
+        # Update first name and surname if provided.
+        if new_first_name:
+            update_data["firstName"] = new_first_name
+        if new_surname:
+            update_data["surname"] = new_surname
+
         if new_telephone:
             update_data["telephone"] = new_telephone
         if new_password:
             auth.update_user(user_id, password=new_password)
             new_hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             update_data["password_hash"] = new_hashed_password
+
         if update_data:
             db.collection("users").document(user_id).update(update_data)
         return jsonify({"message": "User updated successfully"}), 200
