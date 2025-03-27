@@ -193,9 +193,6 @@ def update_user():
         print(f"🔥 ERROR in update_user: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# ---------------------------
-# 6. Search Users Endpoint
-# ---------------------------
 @app.route('/api/search-users', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def search_users():
@@ -207,6 +204,8 @@ def search_users():
         users_ref = db.collection("users")
         results = []
         if "@" in search_query:
+            # Convert search query to lowercase to match stored emails
+            search_query = search_query.lower()
             q = users_ref.where("email", "==", search_query).stream()
             for doc in q:
                 results.append(doc.to_dict())
@@ -221,6 +220,7 @@ def search_users():
     except Exception as e:
         print(f"🔥 ERROR in search_users: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 7. Send Connection Request Endpoint
@@ -442,9 +442,6 @@ def dismiss_notification():
         print(f"🔥 ERROR in dismiss_notification: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# ---------------------------
-# 13. Disconnect Endpoint
-# ---------------------------
 @app.route('/api/disconnect', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def disconnect():
@@ -471,6 +468,7 @@ def disconnect():
     except Exception as e:
         print(f"🔥 ERROR in disconnect: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 14. CREATE PROJECT Endpoint
