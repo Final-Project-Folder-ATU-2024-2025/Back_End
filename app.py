@@ -383,7 +383,7 @@ def user_connections():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 11. Notifications Endpoint
+# 11. Notifications Endpoint (Updated to support excluding a type)
 # ---------------------------
 @app.route('/api/notifications', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -391,6 +391,7 @@ def notifications():
     try:
         data = request.get_json()
         user_id = data.get("userId")
+        exclude_type = data.get("excludeType")  # new optional field
         if not user_id:
             return jsonify({"error": "userId is required"}), 400
         notifs_ref = db.collection("users").document(user_id).collection("notifications")
@@ -398,6 +399,9 @@ def notifications():
         notifications = []
         for doc in query:
             ndata = doc.to_dict()
+            # Skip notifications if exclude_type is provided and matches ndata's type
+            if exclude_type and ndata.get("type") == exclude_type:
+                continue
             ndata["id"] = doc.id
             notifications.append(ndata)
         notifications.sort(key=lambda n: n.get("timestamp", 0), reverse=True)
@@ -405,6 +409,7 @@ def notifications():
     except Exception as e:
         print(f"🔥 ERROR in notifications: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 12. Dismiss Notification Endpoint
