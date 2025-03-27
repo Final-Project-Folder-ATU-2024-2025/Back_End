@@ -973,7 +973,53 @@ def mark_messages_read():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 27. Run the Flask App
+# 27. Remove Collaborator Endpoint
+# ---------------------------
+@app.route('/api/remove-collaborator', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def remove_collaborator():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        collaborator_id = data.get("collaboratorId")
+        owner_id = data.get("ownerId")
+        if not (project_id and collaborator_id and owner_id):
+            return jsonify({"error": "projectId, collaboratorId, and ownerId are required"}), 400
+
+        project_ref = db.collection("projects").document(project_id)
+        project_doc = project_ref.get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+        project_data = project_doc.to_dict()
+
+        # Remove collaborator from the project's team and teamIds lists
+        new_team = [member for member in project_data.get("team", []) if member.get("uid") != collaborator_id]
+        new_team_ids = [uid for uid in project_data.get("teamIds", []) if uid != collaborator_id]
+        project_ref.update({"team": new_team, "teamIds": new_team_ids})
+
+        # Send removal notification to the collaborator
+        owner_doc = db.collection("users").document(owner_id).get()
+        owner_name = ""
+        if owner_doc.exists:
+            owner_data = owner_doc.to_dict()
+            owner_name = f"{owner_data.get('firstName', '')} {owner_data.get('surname', '')}".strip()
+        notification_data = {
+            "type": "project-removal",
+            "message": f"You were removed from project {project_data.get('projectName', 'Unknown')}",
+            "status": "unread",
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "removedBy": owner_name
+        }
+        db.collection("users").document(collaborator_id).collection("notifications").document().set(notification_data)
+
+        return jsonify({"message": "Collaborator removed successfully"}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in remove_collaborator: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------
+# 28. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
