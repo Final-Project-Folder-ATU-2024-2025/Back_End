@@ -637,10 +637,12 @@ def respond_project_invitation():
     try:
         data = request.get_json()
         invitationId = data.get("invitationId")
-        action = data.get("action")
+        action = data.get("action")  # Expected values: "accepted" or "declined"
         userId = data.get("userId")
         if not (invitationId and action and userId):
             return jsonify({"error": "Missing fields"}), 400
+        if action not in ["accepted", "declined"]:
+            return jsonify({"error": "Invalid action"}), 400
         notif_ref = db.collection("users").document(userId).collection("notifications").document(invitationId)
         notif_doc = notif_ref.get()
         if not notif_doc.exists:
@@ -683,9 +685,10 @@ def respond_project_invitation():
             db.collection("users").document(ownerId).collection("notifications").document().set(owner_notif_data)
             return jsonify({"message": "Invitation accepted"}), 200
         else:
+            # When declined, send a notification to the owner.
             owner_notif_data = {
                 "type": "project-invitation-response",
-                "message": f"A user has declined your invitation to the project {projectName}.",
+                "message": f"{userId} has declined your invitation to the project {projectName}.",
                 "status": "unread",
                 "timestamp": firestore.SERVER_TIMESTAMP
             }
@@ -694,6 +697,7 @@ def respond_project_invitation():
     except Exception as e:
         print(f"🔥 ERROR in respond_project_invitation: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 # ---------------------------
 # 18. Invite to Project Endpoint
