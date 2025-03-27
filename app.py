@@ -468,18 +468,14 @@ def create_project():
         tasks = data.get("tasks")
         deadline_str = data.get("deadline")
         owner_id = data.get("ownerId")
-
         if not (project_name and description and owner_id and deadline_str):
             return jsonify({"error": "Project name, description, deadline, and ownerId are required"}), 400
-
         if tasks is None:
             tasks = []
-
         try:
             deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
         except ValueError:
             return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
-
         project_data = {
             "projectName": project_name,
             "description": description,
@@ -492,9 +488,7 @@ def create_project():
         }
         project_ref = db.collection("projects").document()
         project_ref.set(project_data)
-
         return jsonify({"message": "Project created successfully!", "projectId": project_ref.id}), 201
-
     except Exception as e:
         print(f"🔥 ERROR in create_project: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -897,11 +891,26 @@ def send_chat_message():
         "timestamp": firestore.SERVER_TIMESTAMP,
         "read": False
     }
+    # Add the chat message
     db.collection("conversations").document(conversationId).collection("messages").add(message_data)
+    # ---------------------------
+    # 24A. Create a chat notification for the receiver
+    # ---------------------------
+    notification_data = {
+        "type": "chat",
+        "message": f"You have a new message from {senderId}.",
+        "fromUser": {},  # Optionally, include sender details if needed
+        "status": "unread",
+        "timestamp": firestore.SERVER_TIMESTAMP,
+        "conversationId": conversationId
+    }
+    notif_ref = db.collection("users").document(receiverId).collection("notifications").document()
+    notif_ref.set(notification_data)
+    
     return jsonify({"message": "Message sent"}), 200
 
 # ---------------------------
-# 27. Mark Messages as Read Endpoint
+# 26. Mark Messages as Read Endpoint (Updated)
 # ---------------------------
 @app.route('/api/mark-messages-read', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -912,22 +921,40 @@ def mark_messages_read():
         recipient_id = data.get("recipientId")
         if not conversation_id or not recipient_id:
             return jsonify({"error": "conversationId and recipientId are required"}), 400
+        
+        # Update messages as read
         messages_ref = db.collection("conversations").document(conversation_id).collection("messages")
         query = messages_ref.where("receiverId", "==", recipient_id).where("read", "==", False).stream()
         batch = db.batch()
-        count = 0
+        msg_count = 0
         for msg in query:
             msg_ref = messages_ref.document(msg.id)
             batch.update(msg_ref, {"read": True})
-            count += 1
+            msg_count += 1
         batch.commit()
-        return jsonify({"message": f"Marked {count} messages as read"}), 200
+        
+        # ---------------------------
+        # Update chat notifications for this conversation as read
+        # ---------------------------
+        notifs_ref = db.collection("users").document(recipient_id).collection("notifications")
+        notif_query = notifs_ref.where("type", "==", "chat") \
+                                .where("conversationId", "==", conversation_id) \
+                                .where("status", "==", "unread").stream()
+        notif_batch = db.batch()
+        for notif in notif_query:
+            notif_ref = notifs_ref.document(notif.id)
+            notif_batch.update(notif_ref, {"status": "read"})
+        notif_batch.commit()
+        
+        print(f"Marked {msg_count} messages and related chat notifications as read in conversation {conversation_id} for user {recipient_id}")
+        return jsonify({"message": f"Marked {msg_count} messages as read"}), 200
+
     except Exception as e:
         print(f"🔥 ERROR in mark_messages_read: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 26. Run the Flask App
+# 27. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
