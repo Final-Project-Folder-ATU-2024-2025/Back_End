@@ -488,9 +488,9 @@ def create_project():
         if tasks is None:
             tasks = []
         try:
-            deadline_date = datetime.strptime(deadline_str, "%d-%m-%Y")
+            deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
         except ValueError:
-            return jsonify({"error": "Deadline must be in DD-MM-YYYY format"}), 400
+             return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
         project_data = {
             "projectName": project_name,
             "description": description,
@@ -781,12 +781,17 @@ def delete_project():
     try:
         data = request.get_json()
         project_id = data.get("projectId")
-        if not project_id:
-            return jsonify({"error": "Project ID is required"}), 400
+        requester_id = data.get("requesterId")  # New: the uid of the user making the request
+        if not project_id or not requester_id:
+            return jsonify({"error": "Project ID and requesterId are required"}), 400
         project_ref = db.collection("projects").document(project_id)
         project_doc = project_ref.get()
         if not project_doc.exists:
             return jsonify({"error": "Project not found"}), 404
+        project_data = project_doc.to_dict()
+        # Authorization check: Only allow if requester is the owner.
+        if requester_id != project_data.get("ownerId"):
+            return jsonify({"error": "Not authorized to delete this project"}), 403
         project_ref.delete()
         return jsonify({"message": "Project deleted successfully"}), 200
     except Exception as e:
