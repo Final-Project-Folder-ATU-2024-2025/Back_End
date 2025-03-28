@@ -799,6 +799,67 @@ def delete_project():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
+# 20A. Leave Project Endpoint
+# ---------------------------
+@app.route('/api/leave-project', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def leave_project():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        user_id = data.get("userId")
+        if not project_id or not user_id:
+            return jsonify({"error": "Project ID and userId are required"}), 400
+
+        project_ref = db.collection("projects").document(project_id)
+        project_doc = project_ref.get()
+        if not project_doc.exists:
+            return jsonify({"error": "Project not found"}), 404
+
+        project_data = project_doc.to_dict()
+        # Prevent the owner from leaving their own project
+        if user_id == project_data.get("ownerId"):
+            return jsonify({"error": "Project owner cannot leave the project"}), 403
+
+        # Remove the user from the project's team and teamIds
+        new_team = [member for member in project_data.get("team", []) if member.get("uid") != user_id]
+        new_team_ids = [uid for uid in project_data.get("teamIds", []) if uid != user_id]
+        project_ref.update({"team": new_team, "teamIds": new_team_ids})
+
+        # Gather IDs of all remaining members (owner and collaborators)
+        remaining_members = set()
+        if project_data.get("ownerId"):
+            remaining_members.add(project_data.get("ownerId"))
+        for uid in new_team_ids:
+            remaining_members.add(uid)
+
+        # Get leaving user's display name
+        leaving_user_doc = db.collection("users").document(user_id).get()
+        if leaving_user_doc.exists:
+            leaving_user_data = leaving_user_doc.to_dict()
+            leaving_username = f"{leaving_user_data.get('firstName', '')} {leaving_user_data.get('surname', '')}".strip()
+        else:
+            leaving_username = "A user"
+
+        notification_message = f"User {leaving_username} left project {project_data.get('projectName', 'Unknown')}."
+        # Send a notification to every remaining member
+        for member_id in remaining_members:
+            notif_data = {
+                "type": "project-leave",
+                "message": notification_message,
+                "status": "unread",
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "projectId": project_id,
+                "projectName": project_data.get("projectName", "Unknown")
+            }
+            db.collection("users").document(member_id).collection("notifications").add(notif_data)
+
+        return jsonify({"message": "Left project successfully"}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in leave_project: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------
 # 21. Add Comment Endpoint
 # ---------------------------
 @app.route('/api/add-comment', methods=['POST', 'OPTIONS'])
