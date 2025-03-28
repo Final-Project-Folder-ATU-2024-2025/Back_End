@@ -488,9 +488,9 @@ def create_project():
         if tasks is None:
             tasks = []
         try:
-            deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
+            deadline_date = datetime.strptime(deadline_str, "%d-%m-%Y")
         except ValueError:
-            return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+            return jsonify({"error": "Deadline must be in DD-MM-YYYY format"}), 400
         project_data = {
             "projectName": project_name,
             "description": description,
@@ -539,7 +539,7 @@ def update_project():
                 deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
                 update_data["deadline"] = deadline_date
             except ValueError:
-                return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+                return jsonify({"error": "Deadline must be in DD-MM-YYYY format"}), 400
         if update_data:
             project_ref.update(update_data)
             return jsonify({"message": "Project updated successfully"}), 200
