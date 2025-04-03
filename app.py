@@ -974,7 +974,11 @@ def get_comments():
             return jsonify({"error": "projectId is required"}), 400
         comments_ref = db.collection("projects").document(project_id).collection("comments")
         query = comments_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
-        comments = [doc.to_dict() for doc in query]
+        comments = []
+        for doc in query:
+            comment = doc.to_dict()
+            comment["id"] = doc.id   # Section 22: Added the document ID to each comment
+            comments.append(comment)
         return jsonify({"comments": comments}), 200
     except Exception as e:
         print(f"🔥 ERROR in get_comments: {str(e)}")
@@ -1129,9 +1133,38 @@ def remove_collaborator():
         print(f"🔥 ERROR in remove_collaborator: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
 # ---------------------------
-# 28. Run the Flask App
+# 28. DELETE COMMENT Endpoint
+# ---------------------------
+@app.route('/api/delete-comment', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def delete_comment():
+    try:
+        data = request.get_json()
+        project_id = data.get("projectId")
+        comment_id = data.get("commentId")
+        user_id = data.get("userId")
+        
+        if not (project_id and comment_id and user_id):
+            return jsonify({"error": "projectId, commentId, and userId are required"}), 400
+        
+        comment_ref = db.collection("projects").document(project_id).collection("comments").document(comment_id)
+        comment_doc = comment_ref.get()
+        if not comment_doc.exists:
+            return jsonify({"error": "Comment not found"}), 404
+        
+        comment_data = comment_doc.to_dict()
+        # Ensure that only the author can delete their comment.
+        if comment_data.get("userId") != user_id:
+            return jsonify({"error": "Not authorized to delete this comment"}), 403
+        
+        comment_ref.delete()
+        return jsonify({"message": "Comment deleted successfully"}), 200
+    except Exception as e:
+        print(f"🔥 ERROR in delete_comment: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+# ---------------------------
+# 29. Run the Flask App
 # ---------------------------
 if __name__ == "__main__":
     app.run(debug=True)
