@@ -76,7 +76,7 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 5. Login Endpoint – Token Verification
+# 5. Login Endpoint – Token Verification (Updated to include email)
 # ---------------------------
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -90,7 +90,7 @@ def login():
         decoded_token = auth.verify_id_token(id_token)
         uid = decoded_token.get('uid')
 
-        # Optionally, retrieve additional user data from Firestore.
+        # Retrieve additional user data from Firestore.
         user_doc = db.collection("users").document(uid).get()
         user_data = user_doc.to_dict() if user_doc.exists else {}
 
@@ -98,7 +98,8 @@ def login():
             "message": "Logged in successfully!",
             "uid": uid,
             "firstName": user_data.get("firstName", ""),
-            "surname": user_data.get("surname", "")
+            "surname": user_data.get("surname", ""),
+            "email": user_data.get("email", "")  # Return the email
         }), 200
     except Exception as e:
         print(f"🔥 ERROR in login: {str(e)}")
