@@ -507,7 +507,7 @@ def create_project():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 14B. UPDATE PROJECT Endpoint
+# 14B. UPDATE PROJECT Endpoint (Updated for Status Notification)
 # ---------------------------
 @app.route('/api/update-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
@@ -519,12 +519,20 @@ def update_project():
         description = data.get("description")
         tasks = data.get("tasks")
         deadline_str = data.get("deadline")
+        status = data.get("status")  # New: status update (e.g., "In Progress" or "Complete")
+        requester_id = data.get("requesterId")  # Who made the update (for notification)
+        
         if not project_id:
             return jsonify({"error": "Project ID is required"}), 400
+        
         project_ref = db.collection("projects").document(project_id)
         project_doc = project_ref.get()
         if not project_doc.exists:
             return jsonify({"error": "Project not found"}), 404
+        
+        # Get current project data for notifications if needed
+        current_project_data = project_doc.to_dict()
+        
         update_data = {}
         if project_name:
             update_data["projectName"] = project_name
@@ -537,9 +545,49 @@ def update_project():
                 deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
                 update_data["deadline"] = deadline_date
             except ValueError:
-                return jsonify({"error": "Deadline must be in DD-MM-YYYY format"}), 400
+                return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+        if status:
+            update_data["status"] = status
+        
         if update_data:
             project_ref.update(update_data)
+            
+            # If a status update occurred, send notifications to collaborators
+            if status and requester_id:
+                # Get updated project data
+                updated_project_doc = project_ref.get()
+                updated_project_data = updated_project_doc.to_dict()
+                # Get requester user data for display name
+                requester_doc = db.collection("users").document(requester_id).get()
+                if requester_doc.exists:
+                    requester_data = requester_doc.to_dict()
+                    requester_name = f"{requester_data.get('firstName', '')} {requester_data.get('surname', '')}".strip()
+                else:
+                    requester_name = "A user"
+                
+                # Determine recipients: all collaborators (from teamIds) plus the owner (if not the requester)
+                recipients = set(updated_project_data.get("teamIds", []))
+                owner_id = updated_project_data.get("ownerId")
+                if owner_id and owner_id != requester_id:
+                    recipients.add(owner_id)
+                # Exclude the requester from receiving the notification
+                recipients.discard(requester_id)
+                
+                notification_message = f"{requester_name} changed project {updated_project_data.get('projectName', 'Unknown')} status to {status}."
+                
+                for uid in recipients:
+                    notif_data = {
+                        "type": "status-update",
+                        "message": notification_message,
+                        "status": "unread",
+                        "timestamp": firestore.SERVER_TIMESTAMP,
+                        "projectId": project_id,
+                        "projectName": updated_project_data.get("projectName", "Unknown"),
+                        "changedBy": requester_name,
+                        "newStatus": status
+                    }
+                    db.collection("users").document(uid).collection("notifications").document().set(notif_data)
+            
             return jsonify({"message": "Project updated successfully"}), 200
         else:
             return jsonify({"message": "Nothing to update"}), 200
