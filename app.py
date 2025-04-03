@@ -76,32 +76,29 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 5. Login Endpoint (email queried in lowercase)
+# 5. Login Endpoint – Token Verification
 # ---------------------------
 @app.route('/api/login', methods=['POST'])
 def login():
     try:
         data = request.get_json()
-        if not data or 'email' not in data or 'password' not in data:
-            return jsonify({'error': 'Email and password are required'}), 400
-        email = data['email'].lower()
-        provided_password = data['password']
-        users_ref = db.collection("users")
-        query = users_ref.where("email", "==", email).limit(1).stream()
-        user_doc = next(query, None)
-        if not user_doc:
-            return jsonify({"error": "User not found"}), 404
-        user_data = user_doc.to_dict()
-        stored_password_hash = user_data.get("password_hash")
-        if not stored_password_hash or not bcrypt.checkpw(provided_password.encode('utf-8'), stored_password_hash.encode('utf-8')):
-            return jsonify({"error": "Invalid password"}), 401
-        token = "dummy-token"
+        if not data or 'idToken' not in data:
+            return jsonify({'error': 'ID token is required'}), 400
+
+        id_token = data['idToken']
+        # Verify the token using Firebase Admin SDK
+        decoded_token = auth.verify_id_token(id_token)
+        uid = decoded_token.get('uid')
+
+        # Optionally, retrieve additional user data from Firestore.
+        user_doc = db.collection("users").document(uid).get()
+        user_data = user_doc.to_dict() if user_doc.exists else {}
+
         return jsonify({
             "message": "Logged in successfully!",
-            "token": token,
+            "uid": uid,
             "firstName": user_data.get("firstName", ""),
-            "surname": user_data.get("surname", ""),
-            "uid": user_data.get("uid", "")
+            "surname": user_data.get("surname", "")
         }), 200
     except Exception as e:
         print(f"🔥 ERROR in login: {str(e)}")
