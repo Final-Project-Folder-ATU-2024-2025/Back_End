@@ -1,20 +1,22 @@
 import os
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
-from firebase_admin.firestore import ArrayUnion  # For updating arrays
+from firebase_admin.firestore import ArrayUnion  # Used for updating arrays in Firestore documents
 from flask import Flask, request, jsonify
 from flask_cors import CORS, cross_origin
 from datetime import datetime
-import bcrypt  # For password hashing and verification
+import bcrypt  # For hashing and verifying passwords
 
 # ---------------------------
 # 1. Create the Flask App
 # ---------------------------
+# This section creates the Flask application and enables CORS (Cross-Origin Resource Sharing)
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 @app.after_request
 def after_request(response):
+    # This function adds necessary headers to allow cross-origin requests.
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
@@ -22,6 +24,7 @@ def after_request(response):
 # ---------------------------
 # 2. Initialize Firebase Admin SDK
 # ---------------------------
+# This section initializes the Firebase Admin SDK using a service account key.
 service_account_path = "firebase_service_key.json"
 try:
     cred = credentials.Certificate(service_account_path)
@@ -33,11 +36,14 @@ except Exception as e:
 # ---------------------------
 # 3. Create a Firestore Client
 # ---------------------------
+# This section creates a client for Firestore, which will be used for all database interactions.
 db = firestore.client()
 
 # ---------------------------
-# 4. Create User Endpoint (Telephone is optional, email stored in lowercase)
+# 4. Create User Endpoint
 # ---------------------------
+# This endpoint creates a new user. It validates the required fields, hashes the password,
+# creates a Firebase Authentication user, and stores additional user details in Firestore.
 @app.route('/api/create-user', methods=['POST'])
 def create_user():
     try:
@@ -50,17 +56,22 @@ def create_user():
         password = data.get("password")
         if not (first_name and surname and email and password):
             return jsonify({"error": "First name, surname, email, and password are required"}), 400
+        # Validate password with regex (minimum 10 characters, at least one number and special character)
         import re
         password_pattern = re.compile(r'^(?=.*\d)(?=.*[@$!%*?&]).{10,}$')
         if not password_pattern.match(password):
             return jsonify({"error": "Password must be at least 10 characters long and include at least one number and one special character."}), 400
         try:
+            # Check if user already exists by email
             auth.get_user_by_email(email)
             return jsonify({"error": "User already exists"}), 400
         except firebase_admin.auth.UserNotFoundError:
             pass
+        # Hash the password using bcrypt
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        # Create a new Firebase Authentication user
         user = auth.create_user(email=email, password=password, display_name=f"{first_name} {surname}")
+        # Save additional user details in Firestore
         db.collection("users").document(user.uid).set({
             "firstName": first_name,
             "surname": surname,
@@ -76,30 +87,29 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 5. Login Endpoint – Token Verification (Updated to include email)
+# 5. Login Endpoint – Token Verification
 # ---------------------------
+# This endpoint verifies an ID token from the client using Firebase Admin SDK and returns
+# additional user details stored in Firestore.
 @app.route('/api/login', methods=['POST'])
 def login():
     try:
         data = request.get_json()
         if not data or 'idToken' not in data:
             return jsonify({'error': 'ID token is required'}), 400
-
         id_token = data['idToken']
-        # Verify the token using Firebase Admin SDK
+        # Verify the token
         decoded_token = auth.verify_id_token(id_token)
         uid = decoded_token.get('uid')
-
-        # Retrieve additional user data from Firestore.
+        # Retrieve user data from Firestore
         user_doc = db.collection("users").document(uid).get()
         user_data = user_doc.to_dict() if user_doc.exists else {}
-
         return jsonify({
             "message": "Logged in successfully!",
             "uid": uid,
             "firstName": user_data.get("firstName", ""),
             "surname": user_data.get("surname", ""),
-            "email": user_data.get("email", "")  # Return the email
+            "email": user_data.get("email", "")
         }), 200
     except Exception as e:
         print(f"🔥 ERROR in login: {str(e)}")
@@ -108,6 +118,7 @@ def login():
 # ---------------------------
 # 5A. Update User Settings Endpoint
 # ---------------------------
+# This endpoint updates non-password user settings (currently telephone).
 @app.route('/api/update-user-settings', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def update_user_settings():
@@ -129,8 +140,9 @@ def update_user_settings():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 5B. Update User Password Endpoint (Revised)
+# 5B. Update User Password Endpoint
 # ---------------------------
+# This endpoint updates the user's password after validating the new password.
 @app.route('/api/update-user-password', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def update_user_password():
@@ -144,7 +156,9 @@ def update_user_password():
         password_pattern = re.compile(r'^(?=.*\d)(?=.*[@$!%*?&]).{10,}$')
         if not password_pattern.match(new_password):
             return jsonify({"error": "New password must be at least 10 characters long and include at least one number and one special character."}), 400
+        # Update the password in Firebase Authentication
         auth.update_user(user_id, password=new_password)
+        # Hash the new password and update it in Firestore
         new_hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         db.collection("users").document(user_id).set({"password_hash": new_hashed_password}, merge=True)
         return jsonify({"message": "Password updated successfully"}), 200
@@ -155,6 +169,7 @@ def update_user_password():
 # ---------------------------
 # 5C. Update User Endpoint (Combined Settings Update)
 # ---------------------------
+# This endpoint updates multiple user properties (name, telephone, password) in one request.
 @app.route('/api/update-user', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def update_user():
@@ -163,27 +178,21 @@ def update_user():
         user_id = data.get("userId")
         new_telephone = data.get("telephone")
         new_password = data.get("newPassword")
-        # New fields for name and surname:
         new_first_name = data.get("firstName")
         new_surname = data.get("surname")
-        
         if not user_id:
             return jsonify({"error": "userId is required"}), 400
-        
         update_data = {}
-        # Update first name and surname if provided.
         if new_first_name:
             update_data["firstName"] = new_first_name
         if new_surname:
             update_data["surname"] = new_surname
-
         if new_telephone:
             update_data["telephone"] = new_telephone
         if new_password:
             auth.update_user(user_id, password=new_password)
             new_hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             update_data["password_hash"] = new_hashed_password
-
         if update_data:
             db.collection("users").document(user_id).update(update_data)
         return jsonify({"message": "User updated successfully"}), 200
@@ -191,6 +200,10 @@ def update_user():
         print(f"🔥 ERROR in update_user: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# ---------------------------
+# 6. Search Users Endpoint
+# ---------------------------
+# This endpoint allows searching for users by email, first name, or surname.
 @app.route('/api/search-users', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def search_users():
@@ -202,7 +215,6 @@ def search_users():
         users_ref = db.collection("users")
         results = []
         if "@" in search_query:
-            # Convert search query to lowercase to match stored emails
             search_query = search_query.lower()
             q = users_ref.where("email", "==", search_query).stream()
             for doc in q:
@@ -219,10 +231,10 @@ def search_users():
         print(f"🔥 ERROR in search_users: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
 # ---------------------------
 # 7. Send Connection Request Endpoint
 # ---------------------------
+# This endpoint creates a new connection request and sends a notification to the recipient.
 @app.route('/api/send-connection-request', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def send_connection_request():
@@ -266,6 +278,7 @@ def send_connection_request():
 # ---------------------------
 # 8. Cancel Connection Request Endpoint
 # ---------------------------
+# This endpoint cancels a pending connection request and removes its notification.
 @app.route('/api/cancel-connection-request', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def cancel_connection_request():
@@ -298,6 +311,8 @@ def cancel_connection_request():
 # ---------------------------
 # 9. Respond to Connection Request Endpoint
 # ---------------------------
+# This endpoint processes a connection request response (accepted or rejected) and updates
+# the user connections accordingly, also sending appropriate notifications.
 @app.route('/api/respond-connection-request', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def respond_connection_request():
@@ -374,6 +389,7 @@ def respond_connection_request():
 # ---------------------------
 # 10. User Connections Endpoint
 # ---------------------------
+# This endpoint returns the list of connections for a given user.
 @app.route('/api/user-connections', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def user_connections():
@@ -393,15 +409,16 @@ def user_connections():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 11. Notifications Endpoint (Updated to support excluding a type)
+# 11. Notifications Endpoint
 # ---------------------------
+# This endpoint returns notifications for a user. An optional exclude_type parameter can be provided.
 @app.route('/api/notifications', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def notifications():
     try:
         data = request.get_json()
         user_id = data.get("userId")
-        exclude_type = data.get("excludeType")  # new optional field
+        exclude_type = data.get("excludeType")  # Optionally exclude notifications of a given type
         if not user_id:
             return jsonify({"error": "userId is required"}), 400
         notifs_ref = db.collection("users").document(user_id).collection("notifications")
@@ -409,7 +426,6 @@ def notifications():
         notifications = []
         for doc in query:
             ndata = doc.to_dict()
-            # Skip notifications if exclude_type is provided and matches ndata's type
             if exclude_type and ndata.get("type") == exclude_type:
                 continue
             ndata["id"] = doc.id
@@ -420,10 +436,10 @@ def notifications():
         print(f"🔥 ERROR in notifications: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
 # ---------------------------
 # 12. Dismiss Notification Endpoint
 # ---------------------------
+# This endpoint allows a user to dismiss (delete) a notification.
 @app.route('/api/dismiss-notification', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def dismiss_notification():
@@ -440,6 +456,10 @@ def dismiss_notification():
         print(f"🔥 ERROR in dismiss_notification: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# ---------------------------
+# 13. Disconnect Endpoint
+# ---------------------------
+# This endpoint disconnects two users by removing them from each other's connection lists.
 @app.route('/api/disconnect', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def disconnect():
@@ -467,10 +487,10 @@ def disconnect():
         print(f"🔥 ERROR in disconnect: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
 # ---------------------------
 # 14. CREATE PROJECT Endpoint
 # ---------------------------
+# This endpoint creates a new project with specified details including tasks, deadline, and owner.
 @app.route('/api/create-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def create_project():
@@ -488,7 +508,7 @@ def create_project():
         try:
             deadline_date = datetime.strptime(deadline_str, "%Y-%m-%d")
         except ValueError:
-             return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
+            return jsonify({"error": "Deadline must be in YYYY-MM-DD format"}), 400
         project_data = {
             "projectName": project_name,
             "description": description,
@@ -507,8 +527,9 @@ def create_project():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------
-# 14B. UPDATE PROJECT Endpoint (Updated for Status Notification)
+# 14B. UPDATE PROJECT Endpoint (Status Notification)
 # ---------------------------
+# This endpoint updates a project's details and, if the status changes, sends notifications to collaborators.
 @app.route('/api/update-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def update_project():
@@ -519,8 +540,8 @@ def update_project():
         description = data.get("description")
         tasks = data.get("tasks")
         deadline_str = data.get("deadline")
-        status = data.get("status")  # New: status update (e.g., "In Progress" or "Complete")
-        requester_id = data.get("requesterId")  # Who made the update (for notification)
+        status = data.get("status")  # New status update (e.g., "In Progress", "Complete")
+        requester_id = data.get("requesterId")  # UID of the user making the update
         
         if not project_id:
             return jsonify({"error": "Project ID is required"}), 400
@@ -530,9 +551,7 @@ def update_project():
         if not project_doc.exists:
             return jsonify({"error": "Project not found"}), 404
         
-        # Get current project data for notifications if needed
         current_project_data = project_doc.to_dict()
-        
         update_data = {}
         if project_name:
             update_data["projectName"] = project_name
@@ -551,30 +570,21 @@ def update_project():
         
         if update_data:
             project_ref.update(update_data)
-            
-            # If a status update occurred, send notifications to collaborators
             if status and requester_id:
-                # Get updated project data
                 updated_project_doc = project_ref.get()
                 updated_project_data = updated_project_doc.to_dict()
-                # Get requester user data for display name
                 requester_doc = db.collection("users").document(requester_id).get()
                 if requester_doc.exists:
                     requester_data = requester_doc.to_dict()
                     requester_name = f"{requester_data.get('firstName', '')} {requester_data.get('surname', '')}".strip()
                 else:
                     requester_name = "A user"
-                
-                # Determine recipients: all collaborators (from teamIds) plus the owner (if not the requester)
                 recipients = set(updated_project_data.get("teamIds", []))
                 owner_id = updated_project_data.get("ownerId")
                 if owner_id and owner_id != requester_id:
                     recipients.add(owner_id)
-                # Exclude the requester from receiving the notification
                 recipients.discard(requester_id)
-                
                 notification_message = f"{requester_name} changed project {updated_project_data.get('projectName', 'Unknown')} status to {status}."
-                
                 for uid in recipients:
                     notif_data = {
                         "type": "status-update",
@@ -587,7 +597,6 @@ def update_project():
                         "newStatus": status
                     }
                     db.collection("users").document(uid).collection("notifications").document().set(notif_data)
-            
             return jsonify({"message": "Project updated successfully"}), 200
         else:
             return jsonify({"message": "Nothing to update"}), 200
@@ -598,6 +607,7 @@ def update_project():
 # ---------------------------
 # 15. My Projects Endpoint
 # ---------------------------
+# This endpoint retrieves projects that the user owns or is a team member of.
 @app.route('/api/my-projects', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def my_projects():
@@ -630,6 +640,7 @@ def my_projects():
 # ---------------------------
 # 15B. Get Project Endpoint
 # ---------------------------
+# This endpoint retrieves detailed information for a specific project.
 @app.route('/api/get-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def get_project():
@@ -651,6 +662,7 @@ def get_project():
 # ---------------------------
 # 16. Project Deadlines Endpoint
 # ---------------------------
+# This endpoint retrieves deadlines for projects owned by a user.
 @app.route('/api/project-deadlines', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def project_deadlines():
@@ -677,6 +689,7 @@ def project_deadlines():
 # ---------------------------
 # 17. Respond to Project Invitation Endpoint
 # ---------------------------
+# This endpoint allows a user to accept or decline a project invitation.
 @app.route('/api/respond-project-invitation', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def respond_project_invitation():
@@ -731,7 +744,6 @@ def respond_project_invitation():
             db.collection("users").document(ownerId).collection("notifications").document().set(owner_notif_data)
             return jsonify({"message": "Invitation accepted"}), 200
         else:
-            # When declined, send a notification to the owner.
             owner_notif_data = {
                 "type": "project-invitation-response",
                 "message": f"{userId} has declined your invitation to the project {projectName}.",
@@ -744,10 +756,10 @@ def respond_project_invitation():
         print(f"🔥 ERROR in respond_project_invitation: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
 # ---------------------------
 # 18. Invite to Project Endpoint
 # ---------------------------
+# This endpoint sends a project invitation notification to a specified user.
 @app.route('/api/invite-to-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def invite_to_project():
@@ -788,6 +800,7 @@ def invite_to_project():
 # ---------------------------
 # 19. Update Task Milestones Endpoint
 # ---------------------------
+# This endpoint updates the milestones for a given task in a project.
 @app.route('/api/update-task-milestones', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def update_task_milestones():
@@ -821,13 +834,14 @@ def update_task_milestones():
 # ---------------------------
 # 20. Delete Project Endpoint
 # ---------------------------
+# This endpoint deletes a project if the requester is the owner.
 @app.route('/api/delete-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def delete_project():
     try:
         data = request.get_json()
         project_id = data.get("projectId")
-        requester_id = data.get("requesterId")  # New: the uid of the user making the request
+        requester_id = data.get("requesterId")
         if not project_id or not requester_id:
             return jsonify({"error": "Project ID and requesterId are required"}), 400
         project_ref = db.collection("projects").document(project_id)
@@ -835,7 +849,6 @@ def delete_project():
         if not project_doc.exists:
             return jsonify({"error": "Project not found"}), 404
         project_data = project_doc.to_dict()
-        # Authorization check: Only allow if requester is the owner.
         if requester_id != project_data.get("ownerId"):
             return jsonify({"error": "Not authorized to delete this project"}), 403
         project_ref.delete()
@@ -847,6 +860,7 @@ def delete_project():
 # ---------------------------
 # 20A. Leave Project Endpoint
 # ---------------------------
+# This endpoint allows a non-owner to leave a project and notifies remaining members.
 @app.route('/api/leave-project', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def leave_project():
@@ -856,39 +870,28 @@ def leave_project():
         user_id = data.get("userId")
         if not project_id or not user_id:
             return jsonify({"error": "Project ID and userId are required"}), 400
-
         project_ref = db.collection("projects").document(project_id)
         project_doc = project_ref.get()
         if not project_doc.exists:
             return jsonify({"error": "Project not found"}), 404
-
         project_data = project_doc.to_dict()
-        # Prevent the owner from leaving their own project
         if user_id == project_data.get("ownerId"):
             return jsonify({"error": "Project owner cannot leave the project"}), 403
-
-        # Remove the user from the project's team and teamIds
         new_team = [member for member in project_data.get("team", []) if member.get("uid") != user_id]
         new_team_ids = [uid for uid in project_data.get("teamIds", []) if uid != user_id]
         project_ref.update({"team": new_team, "teamIds": new_team_ids})
-
-        # Gather IDs of all remaining members (owner and collaborators)
         remaining_members = set()
         if project_data.get("ownerId"):
             remaining_members.add(project_data.get("ownerId"))
         for uid in new_team_ids:
             remaining_members.add(uid)
-
-        # Get leaving user's display name
         leaving_user_doc = db.collection("users").document(user_id).get()
         if leaving_user_doc.exists:
             leaving_user_data = leaving_user_doc.to_dict()
             leaving_username = f"{leaving_user_data.get('firstName', '')} {leaving_user_data.get('surname', '')}".strip()
         else:
             leaving_username = "A user"
-
         notification_message = f"User {leaving_username} left project {project_data.get('projectName', 'Unknown')}."
-        # Send a notification to every remaining member
         for member_id in remaining_members:
             notif_data = {
                 "type": "project-leave",
@@ -899,7 +902,6 @@ def leave_project():
                 "projectName": project_data.get("projectName", "Unknown")
             }
             db.collection("users").document(member_id).collection("notifications").add(notif_data)
-
         return jsonify({"message": "Left project successfully"}), 200
     except Exception as e:
         print(f"🔥 ERROR in leave_project: {str(e)}")
@@ -908,6 +910,7 @@ def leave_project():
 # ---------------------------
 # 21. Add Comment Endpoint
 # ---------------------------
+# This endpoint adds a new comment to a project and sends notifications to relevant users.
 @app.route('/api/add-comment', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def add_comment():
@@ -935,6 +938,7 @@ def add_comment():
             "commentText": comment_text,
             "timestamp": firestore.SERVER_TIMESTAMP
         }
+        # Add the comment and automatically generate a document ID
         db.collection("projects").document(project_id).collection("comments").add(comment_data)
         notif_message = f"User {username} commented on project {project_name}"
         recipient_ids = set()
@@ -964,6 +968,8 @@ def add_comment():
 # ---------------------------
 # 22. Get Comments Endpoint
 # ---------------------------
+# This endpoint retrieves all comments for a given project, sorted by timestamp.
+# (Document ID is added to each comment in this section.)
 @app.route('/api/get-comments', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def get_comments():
@@ -977,7 +983,7 @@ def get_comments():
         comments = []
         for doc in query:
             comment = doc.to_dict()
-            comment["id"] = doc.id   # Section 22: Added the document ID to each comment
+            comment["id"] = doc.id  # Document ID is added here for deletion reference
             comments.append(comment)
         return jsonify({"comments": comments}), 200
     except Exception as e:
@@ -987,6 +993,7 @@ def get_comments():
 # ---------------------------
 # 23. Get Chat Messages Endpoint
 # ---------------------------
+# This endpoint retrieves chat messages for a conversation, ordered by timestamp.
 @app.route('/api/get-chat-messages', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def get_chat_messages():
@@ -1008,6 +1015,7 @@ def get_chat_messages():
 # ---------------------------
 # 24. Send Chat Message Endpoint
 # ---------------------------
+# This endpoint sends a new chat message and creates a notification for the receiver.
 @app.route('/api/send-chat-message', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def send_chat_message():
@@ -1026,27 +1034,25 @@ def send_chat_message():
         "timestamp": firestore.SERVER_TIMESTAMP,
         "read": False
     }
-    # Add the chat message
+    # Add the chat message to the conversation collection
     db.collection("conversations").document(conversationId).collection("messages").add(message_data)
-    # ---------------------------
-    # 24A. Create a chat notification for the receiver
-    # ---------------------------
+    # Create a chat notification for the receiver
     notification_data = {
         "type": "chat",
         "message": f"You have a new message from {senderId}.",
-        "fromUser": {},  # Optionally, include sender details if needed
+        "fromUser": {},
         "status": "unread",
         "timestamp": firestore.SERVER_TIMESTAMP,
         "conversationId": conversationId
     }
     notif_ref = db.collection("users").document(receiverId).collection("notifications").document()
     notif_ref.set(notification_data)
-    
     return jsonify({"message": "Message sent"}), 200
 
 # ---------------------------
-# 26. Mark Messages as Read Endpoint (Updated)
+# 26. Mark Messages as Read Endpoint
 # ---------------------------
+# This endpoint marks all messages (and related notifications) as read in a conversation for a user.
 @app.route('/api/mark-messages-read', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def mark_messages_read():
@@ -1056,8 +1062,6 @@ def mark_messages_read():
         recipient_id = data.get("recipientId")
         if not conversation_id or not recipient_id:
             return jsonify({"error": "conversationId and recipientId are required"}), 400
-        
-        # Update messages as read
         messages_ref = db.collection("conversations").document(conversation_id).collection("messages")
         query = messages_ref.where("receiverId", "==", recipient_id).where("read", "==", False).stream()
         batch = db.batch()
@@ -1067,10 +1071,7 @@ def mark_messages_read():
             batch.update(msg_ref, {"read": True})
             msg_count += 1
         batch.commit()
-        
-        # ---------------------------
-        # Update chat notifications for this conversation as read
-        # ---------------------------
+        # Update chat notifications as read
         notifs_ref = db.collection("users").document(recipient_id).collection("notifications")
         notif_query = notifs_ref.where("type", "==", "chat") \
                                 .where("conversationId", "==", conversation_id) \
@@ -1080,10 +1081,8 @@ def mark_messages_read():
             notif_ref = notifs_ref.document(notif.id)
             notif_batch.update(notif_ref, {"status": "read"})
         notif_batch.commit()
-        
         print(f"Marked {msg_count} messages and related chat notifications as read in conversation {conversation_id} for user {recipient_id}")
         return jsonify({"message": f"Marked {msg_count} messages as read"}), 200
-
     except Exception as e:
         print(f"🔥 ERROR in mark_messages_read: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -1091,6 +1090,7 @@ def mark_messages_read():
 # ---------------------------
 # 27. Remove Collaborator Endpoint
 # ---------------------------
+# This endpoint removes a collaborator from a project and sends a removal notification.
 @app.route('/api/remove-collaborator', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def remove_collaborator():
@@ -1101,19 +1101,14 @@ def remove_collaborator():
         owner_id = data.get("ownerId")
         if not (project_id and collaborator_id and owner_id):
             return jsonify({"error": "projectId, collaboratorId, and ownerId are required"}), 400
-
         project_ref = db.collection("projects").document(project_id)
         project_doc = project_ref.get()
         if not project_doc.exists:
             return jsonify({"error": "Project not found"}), 404
         project_data = project_doc.to_dict()
-
-        # Remove collaborator from the project's team and teamIds lists
         new_team = [member for member in project_data.get("team", []) if member.get("uid") != collaborator_id]
         new_team_ids = [uid for uid in project_data.get("teamIds", []) if uid != collaborator_id]
         project_ref.update({"team": new_team, "teamIds": new_team_ids})
-
-        # Send removal notification to the collaborator
         owner_doc = db.collection("users").document(owner_id).get()
         owner_name = ""
         if owner_doc.exists:
@@ -1127,7 +1122,6 @@ def remove_collaborator():
             "removedBy": owner_name
         }
         db.collection("users").document(collaborator_id).collection("notifications").document().set(notification_data)
-
         return jsonify({"message": "Collaborator removed successfully"}), 200
     except Exception as e:
         print(f"🔥 ERROR in remove_collaborator: {str(e)}")
@@ -1136,6 +1130,8 @@ def remove_collaborator():
 # ---------------------------
 # 28. DELETE COMMENT Endpoint
 # ---------------------------
+# This endpoint deletes a comment. It checks that the required parameters are provided and that
+# the user is authorized to delete the comment (i.e. is the author).
 @app.route('/api/delete-comment', methods=['POST', 'OPTIONS'])
 @cross_origin()
 def delete_comment():
@@ -1144,27 +1140,24 @@ def delete_comment():
         project_id = data.get("projectId")
         comment_id = data.get("commentId")
         user_id = data.get("userId")
-        
         if not (project_id and comment_id and user_id):
             return jsonify({"error": "projectId, commentId, and userId are required"}), 400
-        
         comment_ref = db.collection("projects").document(project_id).collection("comments").document(comment_id)
         comment_doc = comment_ref.get()
         if not comment_doc.exists:
             return jsonify({"error": "Comment not found"}), 404
-        
         comment_data = comment_doc.to_dict()
-        # Ensure that only the author can delete their comment.
         if comment_data.get("userId") != user_id:
             return jsonify({"error": "Not authorized to delete this comment"}), 403
-        
         comment_ref.delete()
         return jsonify({"message": "Comment deleted successfully"}), 200
     except Exception as e:
         print(f"🔥 ERROR in delete_comment: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 # ---------------------------
 # 29. Run the Flask App
 # ---------------------------
+# This final section starts the Flask application in debug mode.
 if __name__ == "__main__":
     app.run(debug=True)
